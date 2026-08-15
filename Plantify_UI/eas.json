@@ -1,0 +1,34 @@
+{
+  "cli": {
+    "version": ">= 20.5.1",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_PLANTNET_API_KEY": "",
+        "EXPO_PUBLIC_PERENUAL_API_KEY": ""
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_PLANTNET_API_KEY": "",
+        "EXPO_PUBLIC_PERENUAL_API_KEY": ""
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_PLANTNET_API_KEY": "",
+        "EXPO_PUBLIC_PERENUAL_API_KEY": ""
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+  
+}
