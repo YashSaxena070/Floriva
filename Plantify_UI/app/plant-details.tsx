@@ -151,6 +151,7 @@ export default function PlantDetailsScreen() {
     healthStatus,
     lastScannedDate,
     nextWatering,
+    scanId: paramScanId,
   } = useLocalSearchParams<{
     imageUri?: string;
     fromFlow?: string;
@@ -164,9 +165,21 @@ export default function PlantDetailsScreen() {
     healthStatus?: string;
     lastScannedDate?: string;
     nextWatering?: string;
+    scanId?: string;
   }>();
 
   const imageUri = rawImageUri ? decodeURIComponent(rawImageUri) : undefined;
+
+  // Extract scan_id and healthAnalysis from plantResult if available
+  let extractedScanId = paramScanId || '';
+  let extractedHealthAnalysis: any = null;
+  if (plantResult) {
+    try {
+      const parsed = JSON.parse(plantResult);
+      if (parsed.scan_id && !extractedScanId) extractedScanId = parsed.scan_id;
+      if (parsed.healthAnalysis) extractedHealthAnalysis = parsed.healthAnalysis;
+    } catch (e) { /* ignore parse errors */ }
+  }
 
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const toggleSection = (section: string) => {
@@ -1117,6 +1130,8 @@ Do not answer non-plant questions.`;
                   scientificName: scientificName,
                   imageUri: activeImage ? encodeURIComponent(activeImage) : '',
                   healthScore: String(healthAnalysis.healthScore),
+                  scanId: extractedScanId,
+                  healthAnalysisData: extractedHealthAnalysis ? JSON.stringify(extractedHealthAnalysis) : '',
                 }
               });
             }}
@@ -1707,6 +1722,8 @@ Do not answer non-plant questions.`;
                   scientificName: scientificName,
                   imageUri: activeImage ? encodeURIComponent(activeImage) : '',
                   healthScore: String(healthAnalysis.healthScore),
+                  scanId: extractedScanId,
+                  healthAnalysisData: extractedHealthAnalysis ? JSON.stringify(extractedHealthAnalysis) : '',
                 }
               });
             }}

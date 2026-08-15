@@ -3,8 +3,55 @@ Pydantic schemas for AI analysis results.
 These define the data structures that AI providers should return.
 """
 
-from typing import Optional, Any
+from typing import Literal, Optional, Any
 from pydantic import BaseModel, Field
+
+
+class PlantHealthResult(BaseModel):
+    """
+    Structured health/disease analysis result (camelCase format for frontend compatibility).
+    """
+    healthStatus: Literal["healthy", "warning", "diseased"]
+    issue: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    severity: Literal["none", "low", "medium", "high"] = "low"
+    symptoms: list[str] = []
+    possibleCauses: list[str] = []
+    lowConfidence: bool = False
+
+
+class PlantHealthAnalysisOutput(BaseModel):
+    """
+    Structured health/disease analysis validation contract (snake_case for graph & database).
+    Ensures arbitrary LLM text cannot bypass validation before database insertion.
+    """
+    health_status: Literal["healthy", "warning", "diseased"] = Field(
+        default="healthy",
+        description="Overall health state: healthy, warning (mild stress), or diseased",
+    )
+    issue: str = Field(
+        default="No issues detected",
+        max_length=500,
+        description="Specific disease name, pest damage, deficiency, or 'No issues detected'",
+    )
+    confidence: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Confidence level between 0.0 and 1.0",
+    )
+    severity: Literal["none", "low", "medium", "high"] = Field(
+        default="none",
+        description="Severity level of the problem",
+    )
+    symptoms: list[str] = Field(
+        default_factory=list,
+        description="List of observed symptoms (e.g. leaf spots, yellowing, wilting, powdery mildew)",
+    )
+    possible_causes: list[str] = Field(
+        default_factory=list,
+        description="List of underlying causes (e.g. fungal infection, nutrient deficiency, overwatering)",
+    )
 
 
 class IdentificationResult(BaseModel):

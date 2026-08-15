@@ -175,3 +175,73 @@ def get_image_storage() -> ImageStorageProvider:
     Swap this to return a different provider for production.
     """
     return LocalStorageProvider()
+
+
+def validate_image_on_disk(file_path: str) -> dict:
+    """
+    Comprehensive validation for an image on disk:
+    1. Checks file existence & readability
+    2. Validates allowed file extension
+    3. Validates file size (non-zero and <= max size)
+    4. Verifies image integrity via Pillow
+    5. Validates minimum dimensions and basic quality
+
+    Returns:
+        Dict with metadata: {"valid": True, "format": "JPEG", "width": 800, "height": 600, "file_size": 123456}
+
+    Raises:
+        ValueError: If any validation rule fails.
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    # Normalize path
+    clean_path = Path(file_path.lstrip("/"))
+    if not clean_path.exists() or not clean_path.is_file():
+        raise ValueError(f"Image file does not exist at path: {file_path}")
+
+    # Check extension
+    ext = clean_path.suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ValueError(
+            f"Invalid image extension '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+
+    # Check file size
+    file_size = clean_path.stat().st_size
+    if file_size == 0:
+        raise ValueError("Image file is empty (0 bytes).")
+
+    if file_size > settings.max_file_size_bytes:
+        raise ValueError(
+            f"Image file size ({file_size / (1024*1024):.1f}MB) exceeds limit of {settings.MAX_FILE_SIZE_MB}MB."
+        )
+
+    # Verify integrity with Pillow
+    try:
+        with Image.open(clean_path) as img:
+            img.verify()
+    except (UnidentifiedImageError, OSError, SyntaxError) as e:
+        raise ValueError(f"Image file is corrupted or not a valid image format: {str(e)}")
+
+    # Reopen to read dimensions and format (verify() closes/clears the handle)
+    try:
+        with Image.open(clean_path) as img:
+            width, height = img.size
+            img_format = img.format or ext.lstrip(".").upper()
+    except Exception as e:
+        raise ValueError(f"Failed to read image dimensions: {str(e)}")
+
+    # Check minimum resolution
+    if width < 32 or height < 32:
+        raise ValueError(
+            f"Image resolution too low ({width}x{height}). Minimum required: 32x32 pixels."
+        )
+
+    return {
+        "valid": True,
+        "format": img_format,
+        "width": width,
+        "height": height,
+        "file_size": file_size,
+    }
+

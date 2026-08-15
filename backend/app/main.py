@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config.settings import get_settings
 from app.middleware.error_handler import register_exception_handlers
-from app.routers import auth, plants, scans
+from app.routers import auth, plants, scans, products
 
 settings = get_settings()
 
@@ -26,7 +26,7 @@ def create_app() -> FastAPI:
         description=(
             "Backend API for the Plantify mobile application. "
             "Provides authentication, plant management, image scanning, "
-            "and a foundation for AI-powered plant analysis."
+            "AI-powered plant analysis, and product recommendations."
         ),
         version="1.0.0",
         docs_url="/docs",
@@ -66,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(plants.router)
     app.include_router(scans.router)
+    app.include_router(products.router)
 
     # ── Health Check ──────────────────────────────────────────
     @app.get("/api/health", tags=["Health"])

@@ -116,6 +116,19 @@ export interface IdentificationData {
   plant: IdentificationPlantResult;
   alternatives: IdentificationAlternative[];
   lowConfidence: boolean;
+  healthAnalysis?: HealthAnalysisApiResult | null;
+}
+
+// ── Health Analysis Types ────────────────────────────────────────
+
+export interface HealthAnalysisApiResult {
+  healthStatus: 'healthy' | 'warning' | 'diseased';
+  issue: string;
+  confidence: number;
+  severity: 'low' | 'medium' | 'high';
+  symptoms: string[];
+  possibleCauses: string[];
+  lowConfidence?: boolean;
 }
 
 // ── Axios Instance ───────────────────────────────────────────────
@@ -389,6 +402,34 @@ export const api = {
     } catch {
       return false;
     }
+  },
+
+  // ── Health Analysis ─────────────────────────────────────────
+
+  /**
+   * Run health/disease analysis on an existing scan.
+   * Called by the 'Diagnose Health' button on the plant details page.
+   */
+  async analyzeHealth(
+    scanId: string,
+    options?: {
+      plantName?: string;
+      scientificName?: string;
+      imageUrl?: string;
+    }
+  ): Promise<HealthAnalysisApiResult> {
+    const response = await axiosInstance.post<ApiSuccessResponse<HealthAnalysisApiResult>>(
+      `/api/scans/${scanId}/health-analysis`,
+      {
+        plant_name: options?.plantName,
+        scientific_name: options?.scientificName,
+        image_url: options?.imageUrl,
+      },
+      {
+        timeout: 60000, // 60s — vision analysis can be slow
+      }
+    );
+    return response.data.data;
   },
 };
 

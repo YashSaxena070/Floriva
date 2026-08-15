@@ -1,20 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Platform, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import BottomTabBar from '@/components/BottomTabBar';
+import { api, HealthAnalysisApiResult } from '@/services/api';
 
-const GROQ_API_KEY = process.env.EXPO_PUBLIC_GROQ_API_KEY;
-
-interface DiseaseResult {
-  isHealthy: boolean;
-  diseaseName: string;
-  severity: string;
-  about: string;
-  recommendedActions: string[];
+interface DisplayResult {
+  healthStatus: 'healthy' | 'warning' | 'diseased';
+  issue: string;
+  confidence: number;
+  severity: 'low' | 'medium' | 'high';
+  symptoms: string[];
+  possibleCauses: string[];
+  lowConfidence: boolean;
 }
 
 export default function DiseaseDetectionResultScreen() {
@@ -24,96 +25,109 @@ export default function DiseaseDetectionResultScreen() {
     scientificName?: string;
     imageUri?: string;
     healthScore?: string;
-    diseaseName?: string;
-    severity?: string;
+    scanId?: string;
+    healthAnalysisData?: string;
   }>();
 
-  const plantName = params.plantName || 'French Rose';
-  const scientificName = params.scientificName || 'Rosa gallica';
+  const plantName = params.plantName || 'Unknown Plant';
+  const scientificName = params.scientificName || '';
   const rawImageUri = params.imageUri ? decodeURIComponent(params.imageUri) : '';
-  const scoreNum = params.healthScore ? parseInt(params.healthScore, 10) : 65;
+  const scanId = params.scanId || '';
 
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<DiseaseResult>({
-    isHealthy: scoreNum >= 90,
-    diseaseName: params.diseaseName || (scoreNum >= 90 ? 'No Disease Detected' : 'Powdery Mildew'),
-    severity: params.severity || (scoreNum >= 90 ? 'Optimal' : 'Moderate'),
-    about: scoreNum >= 90
-      ? 'Your plant shows vibrant, healthy foliage with clean leaves and robust growth structure. No fungal or pest symptoms were found.'
-      : 'A fungal infection that appears as white powdery spots on leaves and can spread in warm, humid conditions.',
-    recommendedActions: scoreNum >= 90
-      ? [
-          'Maintain consistent watering schedule',
-          'Provide 4-6 hours of indirect sunlight',
-          'Wipe dust off leaves bi-weekly',
-        ]
-      : [
-          'Improve air circulation',
-          'Avoid overhead watering',
-          'Remove affected leaves',
-        ],
-  });
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<DisplayResult | null>(null);
 
+  // Try to use pre-existing health analysis data from identification pipeline
   useEffect(() => {
-    const runDiseaseDiagnosis = async () => {
-      if (!GROQ_API_KEY) return;
+    // Check if health analysis data was passed from the identification flow
+    if (params.healthAnalysisData) {
       try {
-        setLoading(true);
-        const prompt = `Analyze plant disease diagnosis for plant "${plantName}" (${scientificName}). 
-Plant health score is ${scoreNum}/100.
-Determine if the plant has a disease or is healthy.
-Respond ONLY with a valid JSON object matching this schema:
-{
-  "isHealthy": ${scoreNum >= 90},
-  "diseaseName": "${scoreNum >= 90 ? 'No Disease Detected' : 'Powdery Mildew'}",
-  "severity": "${scoreNum >= 90 ? 'Optimal' : 'Moderate'}",
-  "about": "string under 30 words explaining condition",
-  "recommendedActions": ["action 1", "action 2", "action 3"]
-}`;
-
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${GROQ_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: 'llama-3.3-70b-versatile',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are Plantify AI plant pathologist. Output valid JSON only, no markdown tags.',
-              },
-              { role: 'user', content: prompt },
-            ],
-            temperature: 0.2,
-          }),
+        const parsed = JSON.parse(params.healthAnalysisData) as HealthAnalysisApiResult;
+        setResult({
+          healthStatus: parsed.healthStatus || 'warning',
+          issue: parsed.issue || 'Unable to determine',
+          confidence: parsed.confidence ?? 0,
+          severity: parsed.severity || 'low',
+          symptoms: parsed.symptoms || [],
+          possibleCauses: parsed.possibleCauses || [],
+          lowConfidence: parsed.lowConfidence ?? (parsed.confidence < 0.4),
         });
-
-        if (response.ok) {
-          const data = await response.json();
-          let rawText = data?.choices?.[0]?.message?.content?.trim() || '';
-          rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-          const parsed = JSON.parse(rawText);
-          if (parsed?.diseaseName && parsed?.about && parsed?.recommendedActions) {
-            setResult({
-              isHealthy: !!parsed.isHealthy,
-              diseaseName: parsed.diseaseName,
-              severity: parsed.severity || (parsed.isHealthy ? 'Optimal' : 'Moderate'),
-              about: parsed.about,
-              recommendedActions: parsed.recommendedActions.slice(0, 3),
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('Groq disease diagnosis fetch error (using fallback):', err);
-      } finally {
-        setLoading(false);
+        return;
+      } catch (e) {
+        console.warn('Failed to parse passed health data, will call API:', e);
       }
-    };
+    }
 
-    runDiseaseDiagnosis();
-  }, [plantName, scientificName, scoreNum]);
+    // If no pre-existing data, call the backend health analysis API
+    if (scanId) {
+      runBackendHealthAnalysis();
+    }
+  }, []);
+
+  const runBackendHealthAnalysis = async () => {
+    if (!scanId) {
+      setError('No scan data available. Please scan a plant first.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const healthResult = await api.analyzeHealth(scanId, {
+        plantName,
+        scientificName,
+      });
+
+      setResult({
+        healthStatus: healthResult.healthStatus || 'warning',
+        issue: healthResult.issue || 'Unable to determine',
+        confidence: healthResult.confidence ?? 0,
+        severity: healthResult.severity || 'low',
+        symptoms: healthResult.symptoms || [],
+        possibleCauses: healthResult.possibleCauses || [],
+        lowConfidence: healthResult.lowConfidence ?? (healthResult.confidence < 0.4),
+      });
+    } catch (err: any) {
+      console.warn('Health analysis API error:', err);
+      const message = err?.message || err?.detail || 'Health analysis failed. Please try again.';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Status banner configuration
+  const getStatusConfig = () => {
+    if (!result) return { icon: 'help-circle' as const, color: '#718E7B', bg: '#F0F5EF', border: '#EBF2EA', title: 'Analyzing...' };
+    switch (result.healthStatus) {
+      case 'healthy':
+        return { icon: 'checkmark-circle' as const, color: '#16A34A', bg: '#F0FDF4', border: '#DCFCE7', title: 'Healthy Plant' };
+      case 'diseased':
+        return { icon: 'warning' as const, color: '#EF4444', bg: '#FFF5F5', border: '#FEE2E2', title: 'Disease Detected' };
+      case 'warning':
+      default:
+        return { icon: 'alert-circle' as const, color: '#D97706', bg: '#FFFBEB', border: '#FEF3C7', title: 'Needs Attention' };
+    }
+  };
+
+  const getSeverityConfig = () => {
+    if (!result) return { color: '#718E7B', label: '...' };
+    switch (result.severity) {
+      case 'high':
+        return { color: '#EF4444', label: 'High' };
+      case 'medium':
+        return { color: '#D97706', label: 'Medium' };
+      case 'low':
+      default:
+        return { color: '#16A34A', label: 'Low' };
+    }
+  };
+
+  const statusConfig = getStatusConfig();
+  const severityConfig = getSeverityConfig();
+  const confidencePct = result ? Math.round(result.confidence * 100) : 0;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -124,7 +138,7 @@ Respond ONLY with a valid JSON object matching this schema:
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#1C3A27" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Disease Detection Result</Text>
+        <Text style={styles.headerTitle}>Health Analysis</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -138,61 +152,143 @@ Respond ONLY with a valid JSON object matching this schema:
           />
           <View style={styles.plantScanInfo}>
             <Text style={styles.plantScanName} numberOfLines={1}>{plantName}</Text>
-            <Text style={styles.plantScanBotanical} numberOfLines={1}>{scientificName}</Text>
+            {scientificName ? (
+              <Text style={styles.plantScanBotanical} numberOfLines={1}>{scientificName}</Text>
+            ) : null}
             <View style={styles.scannedBadge}>
-              <Ionicons name="checkmark-circle" size={12} color="#15803D" style={{ marginRight: 4 }} />
-              <Text style={styles.scannedBadgeText}>Photo Diagnosed</Text>
+              <Ionicons name="scan-outline" size={12} color="#15803D" style={{ marginRight: 4 }} />
+              <Text style={styles.scannedBadgeText}>AI Health Analysis</Text>
             </View>
           </View>
         </View>
 
-        {loading ? (
+        {/* Loading State */}
+        {loading && (
           <View style={styles.loadingBox}>
             <ActivityIndicator size="small" color="#65A30D" />
-            <Text style={styles.loadingText}>Running AI Disease Check on scanned photo...</Text>
+            <Text style={styles.loadingText}>Running AI Health Analysis on scanned photo...</Text>
           </View>
-        ) : null}
+        )}
 
-        {/* Card 1: Disease Status Banner */}
-        <View style={[styles.bannerCard, result.isHealthy ? styles.healthyBanner : styles.diseaseBanner]}>
-          <View style={styles.bannerRow}>
-            <View style={[styles.iconBg, result.isHealthy ? styles.healthyIconBg : styles.diseaseIconBg]}>
-              <Ionicons
-                name={result.isHealthy ? "checkmark-circle" : "warning"}
-                size={28}
-                color={result.isHealthy ? "#16A34A" : "#EF4444"}
-              />
-            </View>
-            <View style={styles.bannerTextCol}>
-              <Text style={[styles.bannerStatusTitle, { color: result.isHealthy ? '#15803D' : '#EF4444' }]}>
-                {result.isHealthy ? 'Healthy Plant' : 'Disease Detected'}
-              </Text>
-              <Text style={styles.diseaseNameText} numberOfLines={1}>{result.diseaseName}</Text>
-              <Text style={styles.severityLabel}>
-                Severity: <Text style={{ color: result.isHealthy ? '#16A34A' : '#D97706', fontWeight: '800' }}>{result.severity}</Text>
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Card 2: About this disease */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>About this disease</Text>
-          <Text style={styles.cardDesc}>{result.about}</Text>
-        </View>
-
-        {/* Card 3: Recommended Actions */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Recommended Actions</Text>
-          <View style={styles.actionsList}>
-            {result.recommendedActions.map((action, idx) => (
-              <View key={idx} style={styles.actionRow}>
-                <Ionicons name="checkmark-circle-outline" size={20} color="#65A30D" style={{ marginRight: 10 }} />
-                <Text style={styles.actionText}>{action}</Text>
+        {/* Error State */}
+        {error && !loading && (
+          <View style={styles.errorCard}>
+            <View style={styles.errorRow}>
+              <View style={styles.errorIconBg}>
+                <Ionicons name="alert-circle" size={28} color="#EF4444" />
               </View>
-            ))}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.errorTitle}>Analysis Failed</Text>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            </View>
+            {scanId ? (
+              <TouchableOpacity
+                style={styles.retryBtn}
+                activeOpacity={0.85}
+                onPress={runBackendHealthAnalysis}
+              >
+                <Ionicons name="refresh-outline" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Text style={styles.retryBtnText}>Try Again</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
-        </View>
+        )}
+
+        {/* Results */}
+        {result && !loading && (
+          <>
+            {/* Low Confidence Warning */}
+            {result.lowConfidence && (
+              <View style={styles.lowConfidenceWarning}>
+                <Ionicons name="information-circle-outline" size={18} color="#92400E" style={{ marginRight: 8 }} />
+                <Text style={styles.lowConfidenceText}>
+                  Low confidence result. Please upload a clearer image for a more accurate diagnosis.
+                </Text>
+              </View>
+            )}
+
+            {/* Card 1: Health Status Banner */}
+            <View style={[styles.bannerCard, { backgroundColor: statusConfig.bg, borderColor: statusConfig.border }]}>
+              <View style={styles.bannerRow}>
+                <View style={[styles.iconBg, { backgroundColor: statusConfig.border }]}>
+                  <Ionicons name={statusConfig.icon} size={28} color={statusConfig.color} />
+                </View>
+                <View style={styles.bannerTextCol}>
+                  <Text style={[styles.bannerStatusTitle, { color: statusConfig.color }]}>
+                    {statusConfig.title}
+                  </Text>
+                  <Text style={styles.diseaseNameText} numberOfLines={2}>{result.issue}</Text>
+                  <View style={styles.metaRow}>
+                    <Text style={styles.severityLabel}>
+                      Severity: <Text style={{ color: severityConfig.color, fontWeight: '800' }}>{severityConfig.label}</Text>
+                    </Text>
+                    <Text style={styles.confidenceLabel}>
+                      Confidence: <Text style={{ color: confidencePct >= 70 ? '#16A34A' : '#D97706', fontWeight: '800' }}>{confidencePct}%</Text>
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {/* Card 2: Confidence Indicator */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Analysis Confidence</Text>
+              <View style={styles.confidenceBarBg}>
+                <View style={[styles.confidenceBarFill, {
+                  width: `${confidencePct}%`,
+                  backgroundColor: confidencePct >= 70 ? '#65A30D' : confidencePct >= 40 ? '#D97706' : '#EF4444',
+                }]} />
+              </View>
+              <Text style={styles.confidenceNote}>
+                {confidencePct >= 70
+                  ? 'High confidence — this diagnosis is likely accurate.'
+                  : confidencePct >= 40
+                    ? 'Moderate confidence — consider uploading additional photos for verification.'
+                    : 'Low confidence — unable to determine the issue confidently. Please upload a clearer image.'}
+              </Text>
+            </View>
+
+            {/* Card 3: Symptoms */}
+            {result.symptoms.length > 0 && (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Observed Symptoms</Text>
+                <View style={styles.tagList}>
+                  {result.symptoms.map((symptom, idx) => (
+                    <View key={idx} style={styles.symptomTag}>
+                      <Ionicons name="ellipse" size={6} color="#D97706" style={{ marginRight: 6 }} />
+                      <Text style={styles.symptomText}>{symptom}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Card 4: Possible Causes */}
+            {result.possibleCauses.length > 0 && (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Possible Causes</Text>
+                <View style={styles.actionsList}>
+                  {result.possibleCauses.map((cause, idx) => (
+                    <View key={idx} style={styles.actionRow}>
+                      <Ionicons name="help-circle-outline" size={20} color="#718E7B" style={{ marginRight: 10 }} />
+                      <Text style={styles.actionText}>{cause}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Card 5: Note about AI analysis */}
+            <View style={styles.noteCard}>
+              <Ionicons name="information-circle-outline" size={16} color="#718E7B" style={{ marginRight: 8 }} />
+              <Text style={styles.noteText}>
+                This analysis is generated by AI and should not be treated as a confirmed diagnosis.
+                Consult a plant expert for critical cases.
+              </Text>
+            </View>
+          </>
+        )}
       </ScrollView>
 
       {/* Sticky Bottom Action Button & Tab Bar */}
@@ -205,8 +301,8 @@ Respond ONLY with a valid JSON object matching this schema:
               pathname: '/disease-care-plan',
               params: {
                 plantName,
-                diseaseName: result.diseaseName,
-                severity: result.severity,
+                diseaseName: result?.issue || 'Unknown',
+                severity: result?.severity || 'low',
               }
             })}
           >
@@ -254,6 +350,7 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 150,
   },
+  // ── Plant Context ────────────────────────────────────
   plantScanHeaderCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -304,34 +401,96 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#15803D',
   },
+  // ── Loading ──────────────────────────────────────────
   loadingBox: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F0FDF4',
-    padding: 10,
-    borderRadius: 12,
-    marginBottom: 10,
-    gap: 8,
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 12,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#DCFCE7',
   },
   loadingText: {
-    fontSize: 12,
+    fontSize: 13,
     color: '#15803D',
     fontWeight: '700',
+    flex: 1,
   },
+  // ── Error ────────────────────────────────────────────
+  errorCard: {
+    backgroundColor: '#FFF5F5',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+  },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  errorIconBg: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FEE2E2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  errorTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#EF4444',
+    marginBottom: 4,
+  },
+  errorText: {
+    fontSize: 13,
+    color: '#5F7265',
+    lineHeight: 18,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EF4444',
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  retryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  // ── Low Confidence Warning ───────────────────────────
+  lowConfidenceWarning: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FEF3C7',
+  },
+  lowConfidenceText: {
+    fontSize: 12,
+    color: '#92400E',
+    fontWeight: '600',
+    flex: 1,
+    lineHeight: 17,
+  },
+  // ── Status Banner ────────────────────────────────────
   bannerCard: {
     borderRadius: 18,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1.2,
-  },
-  diseaseBanner: {
-    backgroundColor: '#FFF5F5',
-    borderColor: '#FEE2E2',
-  },
-  healthyBanner: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#DCFCE7',
   },
   bannerRow: {
     flexDirection: 'row',
@@ -345,12 +504,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 12,
   },
-  diseaseIconBg: {
-    backgroundColor: '#FEE2E2',
-  },
-  healthyIconBg: {
-    backgroundColor: '#DCFCE7',
-  },
   bannerTextCol: {
     flex: 1,
     flexShrink: 1,
@@ -362,15 +515,25 @@ const styles = StyleSheet.create({
   },
   diseaseNameText: {
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '700',
     color: '#1C3A27',
-    marginBottom: 2,
+    marginBottom: 4,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    gap: 16,
   },
   severityLabel: {
     fontSize: 12,
     color: '#718E7B',
     fontWeight: '600',
   },
+  confidenceLabel: {
+    fontSize: 12,
+    color: '#718E7B',
+    fontWeight: '600',
+  },
+  // ── Cards ────────────────────────────────────────────
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 18,
@@ -388,30 +551,80 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: '#1C3A27',
+    marginBottom: 10,
+  },
+  // ── Confidence Bar ───────────────────────────────────
+  confidenceBarBg: {
+    height: 8,
+    backgroundColor: '#F0F5EF',
+    borderRadius: 4,
+    overflow: 'hidden',
     marginBottom: 8,
   },
-  cardDesc: {
-    fontSize: 13,
-    color: '#5F7265',
-    lineHeight: 19,
-    fontWeight: '500',
-    flexShrink: 1,
+  confidenceBarFill: {
+    height: '100%',
+    borderRadius: 4,
   },
+  confidenceNote: {
+    fontSize: 12,
+    color: '#5F7265',
+    lineHeight: 17,
+    fontWeight: '500',
+  },
+  // ── Symptoms Tags ────────────────────────────────────
+  tagList: {
+    gap: 8,
+  },
+  symptomTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FEF3C7',
+  },
+  symptomText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#92400E',
+    flex: 1,
+  },
+  // ── Causes List ──────────────────────────────────────
   actionsList: {
     gap: 10,
     marginTop: 2,
   },
   actionRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   actionText: {
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '600',
     color: '#1C3A27',
     flex: 1,
     flexShrink: 1,
+    lineHeight: 18,
   },
+  // ── Note Card ────────────────────────────────────────
+  noteCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#F0F5EF',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  noteText: {
+    fontSize: 11,
+    color: '#718E7B',
+    fontWeight: '500',
+    flex: 1,
+    lineHeight: 16,
+  },
+  // ── Footer ───────────────────────────────────────────
   footerWrapper: {
     position: 'absolute',
     bottom: 0,

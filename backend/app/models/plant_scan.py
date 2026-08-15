@@ -58,6 +58,12 @@ class PlantScan(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    care_recommendation = relationship(
+        "CareRecommendation",
+        back_populates="scan",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<PlantScan(id={self.id}, status={self.status})>"

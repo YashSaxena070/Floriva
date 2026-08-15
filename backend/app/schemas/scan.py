@@ -77,11 +77,24 @@ class IdentificationData(BaseModel):
     {
         "scan_id": "...",
         "plant": { "name": ..., "scientificName": ..., "confidence": ... },
-        "alternatives": [...]
+        "alternatives": [...],
+        "healthAnalysis": { ... }
     }
     """
     scan_id: uuid.UUID
     plant: IdentificationPlantResult
     alternatives: list[IdentificationAlternative] = []
     lowConfidence: bool = False
+
+
+class PlantHealthAnalysisResponse(BaseModel):
+    """Schema for the health analysis data in API responses."""
+    healthStatus: str  # "healthy" | "warning" | "diseased"
+    issue: str
+    confidence: float
+    severity: str  # "low" | "medium" | "high"
+    symptoms: list[str] = []
+    possibleCauses: list[str] = []
+    lowConfidence: bool = False
+
 
