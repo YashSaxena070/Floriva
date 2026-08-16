@@ -94,3 +94,33 @@ class AuthService:
         if not user:
             raise ValueError("User not found")
         return user
+
+    def authenticate_google_user(
+        self,
+        email: str,
+        name: str,
+        google_id: str | None = None,
+    ) -> tuple[User, str]:
+        """
+        Authenticate or automatically create a user via Google OAuth2.
+        Returns (user, access_token).
+        """
+        user = self.user_repo.get_by_email(email)
+        if not user:
+            # Create new user for first-time Google sign-in
+            random_password = uuid.uuid4().hex + uuid.uuid4().hex
+            password_hash = self.hash_password(random_password)
+            user = self.user_repo.create(
+                name=name or email.split("@")[0],
+                email=email,
+                password_hash=password_hash,
+            )
+        else:
+            # Update name if changed
+            if name and (not user.name or user.name == "User"):
+                user.name = name
+                self.db.commit()
+                self.db.refresh(user)
+
+        token = self.create_access_token(user.id)
+        return user, token

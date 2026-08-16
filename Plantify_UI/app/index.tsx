@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -5,6 +6,8 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { api } from '@/services/api';
 
 const { width } = Dimensions.get('window');
 
@@ -19,6 +22,18 @@ export default function WelcomeScreen() {
 
   const handleStart = async (action: 'scan' | 'upload') => {
     try {
+      // 1. Check if user is authenticated
+      const isAuthed = await api.isAuthenticated();
+      if (!isAuthed) {
+        // New or unauthenticated user -> route to Login screen
+        router.push({
+          pathname: '/login' as any,
+          params: { action }
+        });
+        return;
+      }
+
+      // 2. Authenticated user -> Check location permission
       const { status } = await Location.getForegroundPermissionsAsync();
       if (status === 'granted') {
         if (action === 'scan') {
@@ -34,7 +49,7 @@ export default function WelcomeScreen() {
       }
     } catch (err) {
       router.push({
-        pathname: '/location-permission',
+        pathname: '/login' as any,
         params: { action }
       });
     }

@@ -55,6 +55,27 @@ class PlantifyGraphState(TypedDict, total=False):
 
     # ── Cart & Human Interaction ────────────────────────────────
     cart_action: str  # "none" | "add" | "skip"
+    cart_decision_data: dict[str, Any]  # {product_id, quantity, reason, ...}
+    cart_confirmation: str  # "pending" | "approved" | "declined"
+    cart_item_added: dict[str, Any]  # result after successful cart addition
+    buy_links: list[dict[str, Any]]  # external purchase links
+
+    # ── Plant Memory (Loaded by load_plant_context) ──────────────
+    # Plant identity
+    plant_name: str
+    plant_scientific_name: str
+    plant_identification_confidence: float
+    plant_primary_image: str
+    # Scan history
+    scan_history: list[dict[str, Any]]  # Last N scans with full details
+    # Health history summary
+    health_summary: dict[str, Any]  # {total_checks, status_distribution, common_issues, severity_distribution, latest_status, latest_issue}
+    # Treatment history
+    treatment_summary: dict[str, Any]  # {total_treatments, treatments, product_categories_recommended}
+    # Recommended & purchased products
+    cart_history: list[dict[str, Any]]  # Cart items from previous scans
+    # Plant images
+    plant_images: list[dict[str, Any]]
 
     # ── Diagnostic & Trace Messages ─────────────────────────────
     messages: Annotated[list[str], add]
@@ -95,6 +116,21 @@ def create_initial_state(
         "product_candidates": [],
         "recommended_products": [],
         "cart_action": "none",
+        "cart_decision_data": {},
+        "cart_confirmation": "pending",
+        "cart_item_added": {},
+        "buy_links": [],
         "messages": [],
         "errors": [],
+        # Plant memory fields (initialized empty, populated by load_plant_context)
+        "plant_name": "",
+        "plant_scientific_name": "",
+        "plant_identification_confidence": 0.0,
+        "plant_primary_image": "",
+        "scan_history": [],
+        "health_summary": {},
+        "treatment_summary": {},
+        "cart_history": [],
+        "plant_images": [],
     }
+

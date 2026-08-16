@@ -303,6 +303,7 @@ export default function DiseaseDetectionResultScreen() {
                 plantName,
                 diseaseName: result?.issue || 'Unknown',
                 severity: result?.severity || 'low',
+                scanId: scanId || '',
               }
             })}
           >

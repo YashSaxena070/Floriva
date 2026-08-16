@@ -12,12 +12,36 @@
 
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 
 // ── Configuration ────────────────────────────────────────────────
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
-const TOKEN_KEY = '@plantify_auth_token';
-const USER_KEY = '@plantify_auth_user';
+const getBaseUrl = (): string => {
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL;
+  }
+  
+  // Detect host IP when running in Expo Go on real devices over LAN
+  const hostUri = Constants.expoConfig?.hostUri || (Constants as any).manifest2?.extra?.expoGo?.debuggerHost;
+  if (hostUri) {
+    const ip = hostUri.split(':')[0];
+    if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
+      return `http://${ip}:8000`;
+    }
+  }
+
+  // Android emulator loopback
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:8000';
+  }
+
+  return 'http://localhost:8000';
+};
+
+const API_BASE_URL = getBaseUrl();
+export const TOKEN_KEY = '@plantify_auth_token';
+export const USER_KEY = '@plantify_auth_user';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -131,6 +155,79 @@ export interface HealthAnalysisApiResult {
   lowConfidence?: boolean;
 }
 
+// ── Product & Recommendation Types ──────────────────────────────
+
+export interface ProductData {
+  id: string;
+  category_id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  price: number;
+  currency: string;
+  image_url: string | null;
+  retailer_name: string | null;
+  retailer_url: string | null;
+  is_active: boolean;
+  category_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CareRecommendationData {
+  id: string;
+  scan_id: string;
+  summary: string;
+  care: {
+    watering: string;
+    sunlight: string;
+    temperature: string;
+    humidity: string;
+    soil: string;
+    fertilization: string;
+    pruning: string;
+  };
+  problem: {
+    detected: boolean;
+    name: string;
+    category: string;
+    severity: string;
+    description: string;
+  };
+  treatment: {
+    required: boolean;
+    product_category: string;
+    recommended_actions: string[];
+    frequency: string;
+    estimated_duration: string;
+    precautions: string[];
+    instructions: string;
+  };
+  provider: string;
+  created_at: string;
+}
+
+export interface CartItemData {
+  id: string;
+  cart_id: string;
+  product_id: string;
+  quantity: number;
+  recommendation_reason: string | null;
+  scan_id: string | null;
+  created_at: string;
+  product: ProductData;
+}
+
+export interface CartData {
+  id: string;
+  user_id: string;
+  items: CartItemData[];
+  total_items: number;
+  total_price: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // ── Axios Instance ───────────────────────────────────────────────
 
 const axiosInstance: AxiosInstance = axios.create({
@@ -177,22 +274,42 @@ axiosInstance.interceptors.response.use(
 
 // ── Token Management ─────────────────────────────────────────────
 
-async function saveAuthData(tokenData: TokenData): Promise<void> {
+export async function saveAuthData(tokenData: TokenData): Promise<void> {
   await AsyncStorage.setItem(TOKEN_KEY, tokenData.access_token);
   await AsyncStorage.setItem(USER_KEY, JSON.stringify(tokenData.user));
 }
 
-async function clearAuthData(): Promise<void> {
+export async function clearAuthData(): Promise<void> {
   await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
 }
 
-async function getStoredUser(): Promise<AuthUser | null> {
+export async function getStoredUser(): Promise<AuthUser | null> {
   const userData = await AsyncStorage.getItem(USER_KEY);
   return userData ? JSON.parse(userData) : null;
 }
 
-async function getStoredToken(): Promise<string | null> {
+export async function getStoredToken(): Promise<string | null> {
   return AsyncStorage.getItem(TOKEN_KEY);
+}
+
+export async function createUploadFormData(imageUri: string, fieldName = 'image', fileName = 'plant_scan.jpg'): Promise<FormData> {
+  const formData = new FormData();
+  if (Platform.OS === 'web') {
+    try {
+      const res = await fetch(imageUri);
+      const blob = await res.blob();
+      formData.append(fieldName, blob, fileName);
+      return formData;
+    } catch {
+      // Fallback
+    }
+  }
+  formData.append(fieldName, {
+    uri: imageUri,
+    name: fileName,
+    type: 'image/jpeg',
+  } as any);
+  return formData;
 }
 
 // ── API Methods ──────────────────────────────────────────────────
@@ -220,6 +337,24 @@ export const api = {
     const response = await axiosInstance.post<ApiSuccessResponse<TokenData>>(
       '/api/auth/login',
       { email, password }
+    );
+    const tokenData = response.data.data;
+    await saveAuthData(tokenData);
+    return tokenData;
+  },
+
+  /**
+   * Authenticate or register with Google OAuth2.
+   */
+  async loginWithGoogle(payload: {
+    token?: string;
+    email?: string;
+    name?: string;
+    google_id?: string;
+  }): Promise<TokenData> {
+    const response = await axiosInstance.post<ApiSuccessResponse<TokenData>>(
+      '/api/auth/google',
+      payload
     );
     const tokenData = response.data.data;
     await saveAuthData(tokenData);
@@ -326,13 +461,7 @@ export const api = {
    * Upload an image and create a scan for a plant.
    */
   async createScan(plantId: string, imageUri: string): Promise<ScanData> {
-    const formData = new FormData();
-
-    formData.append('image', {
-      uri: imageUri,
-      name: 'plant_scan.jpg',
-      type: 'image/jpeg',
-    } as any);
+    const formData = await createUploadFormData(imageUri, 'image', 'plant_scan.jpg');
 
     const response = await axiosInstance.post<ApiSuccessResponse<ScanData>>(
       `/api/plants/${plantId}/scans`,
@@ -371,13 +500,7 @@ export const api = {
    * The backend calls Pl@ntNet — API key is never exposed to the frontend.
    */
   async identifyPlant(plantId: string, imageUri: string): Promise<IdentificationData> {
-    const formData = new FormData();
-
-    formData.append('image', {
-      uri: imageUri,
-      name: 'plant_identify.jpg',
-      type: 'image/jpeg',
-    } as any);
+    const formData = await createUploadFormData(imageUri, 'image', 'plant_identify.jpg');
 
     const response = await axiosInstance.post<ApiSuccessResponse<IdentificationData>>(
       `/api/plants/${plantId}/identify`,
@@ -430,6 +553,115 @@ export const api = {
       }
     );
     return response.data.data;
+  },
+
+  // ── AI Care & Treatment Analysis ────────────────────────────
+
+  /**
+   * Run full AI care & treatment analysis on a completed scan.
+   */
+  async analyzeScan(scanId: string): Promise<CareRecommendationData> {
+    const response = await axiosInstance.post<ApiSuccessResponse<CareRecommendationData>>(
+      `/api/scans/${scanId}/analyze`,
+      {},
+      { timeout: 60000 }
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Retrieve a previously generated care recommendation for a scan.
+   */
+  async getScanRecommendation(scanId: string): Promise<CareRecommendationData> {
+    const response = await axiosInstance.get<ApiSuccessResponse<CareRecommendationData>>(
+      `/api/scans/${scanId}/recommendation`
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Run end-to-end LangGraph pipeline for a scan.
+   */
+  async runScanPipeline(scanId: string): Promise<any> {
+    const response = await axiosInstance.post<ApiSuccessResponse<any>>(
+      `/api/scans/${scanId}/pipeline`,
+      {},
+      { timeout: 90000 }
+    );
+    return response.data.data;
+  },
+
+  // ── Product Catalog & Recommendations ────────────────────────
+
+  /**
+   * List products from catalog.
+   */
+  async getProducts(params?: {
+    categoryId?: string;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: ProductData[]; total: number; page: number; total_pages: number }> {
+    const response = await axiosInstance.get<ApiSuccessResponse<{ items: ProductData[]; total: number; page: number; total_pages: number }>>(
+      '/api/products',
+      { params }
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Get AI-recommended products for a disease and plant.
+   */
+  async getRecommendedProducts(payload: {
+    disease_name: string;
+    plant_name?: string;
+    category?: string;
+  }): Promise<ProductData[]> {
+    const response = await axiosInstance.post<ApiSuccessResponse<ProductData[]>>(
+      '/api/products/recommendations',
+      payload
+    );
+    return response.data.data;
+  },
+
+  // ── Cart ────────────────────────────────────────────────────
+
+  /**
+   * Get user's active recommendation cart.
+   */
+  async getCart(): Promise<CartData> {
+    const response = await axiosInstance.get<ApiSuccessResponse<CartData>>('/api/cart');
+    return response.data.data;
+  },
+
+  /**
+   * Add a product to the cart.
+   */
+  async addToCart(payload: {
+    product_id: string;
+    quantity?: number;
+    recommendation_reason?: string;
+    scan_id?: string;
+  }): Promise<CartItemData> {
+    const response = await axiosInstance.post<ApiSuccessResponse<CartItemData>>(
+      '/api/cart/items',
+      payload
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Remove an item from the cart.
+   */
+  async removeCartItem(itemId: string): Promise<void> {
+    await axiosInstance.delete(`/api/cart/items/${itemId}`);
+  },
+
+  /**
+   * Clear all items in the cart.
+   */
+  async clearCart(): Promise<void> {
+    await axiosInstance.delete('/api/cart');
   },
 };
 

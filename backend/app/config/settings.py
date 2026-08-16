@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # ── CORS ──────────────────────────────────────────────────
     CLIENT_URL: str = "http://localhost:8081"
 
+    # ── Google OAuth2 (Server Verification & Secret) ──────────
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
     # ── External API Keys ─────────────────────────────────────
     PLANTNET_API_KEY: str = ""
     PERENUAL_API_KEY: str = ""

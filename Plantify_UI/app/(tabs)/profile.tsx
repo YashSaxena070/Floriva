@@ -13,11 +13,12 @@ const MENU_ITEMS = [
   { id: '1', emoji: '⚙️', label: 'Account Settings' },
   { id: '2', emoji: '🔔', label: 'Reminders & Notifications' },
   { id: '5', emoji: '💬', label: 'Help & Support' },
+  { id: '6', emoji: '🚪', label: 'Log Out' },
 ];
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { userName, setUserName, userAvatar, setUserAvatar, userEmail, setUserEmail, scansCount } = useUser();
+  const { userName, setUserName, userAvatar, setUserAvatar, userEmail, setUserEmail, scansCount, logout } = useUser();
   const [isEditing, setIsEditing] = useState(false);
   const [tempName, setTempName] = useState(userName);
   const [tempEmail, setTempEmail] = useState(userEmail);
@@ -70,6 +71,23 @@ export default function ProfileScreen() {
         break;
       case '5': // Help & Support
         setIsSupportExpanded(!isSupportExpanded);
+        break;
+      case '6': // Log Out
+        Alert.alert(
+          'Log Out',
+          'Are you sure you want to log out of Plantify?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Log Out',
+              style: 'destructive',
+              onPress: async () => {
+                await logout();
+                router.replace('/login' as any);
+              },
+            },
+          ]
+        );
         break;
       default:
         break;

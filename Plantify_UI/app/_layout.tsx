@@ -9,6 +9,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { api } from '@/services/api';
 import { plantService } from '@/services/plantService';
 import { resolveLocalUri } from '@/services/uriHelper';
 
@@ -32,6 +33,7 @@ export const UserContext = createContext({
   saveReminder: (reminder: any) => { },
   addHealthScan: (plantName: string, score: number, imageUri?: string, categoryRatings?: any) => { },
   updateCategoryRatings: (plantName: string, ratings: any) => { },
+  logout: async () => { },
   isDbSyncing: false,
   dbSyncProgress: 0,
   dbSyncStatusText: '',
@@ -332,6 +334,24 @@ export default function RootLayout() {
     }
   };
 
+  const logout = async () => {
+    try {
+      await api.logout();
+      await AsyncStorage.multiRemove([
+        '@plantify_auth_token',
+        '@plantify_auth_user',
+        '@user_name',
+        '@user_email',
+        '@user_avatar',
+      ]);
+      setUserName('User');
+      setUserEmail('');
+      setUserAvatar(null);
+    } catch (err) {
+      console.error('Failed to log out:', err);
+    }
+  };
+
   const [loaded, error] = useFonts({
     ...Ionicons.font,
     'Ionicons': require('@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf'),
@@ -377,6 +397,7 @@ export default function RootLayout() {
       saveReminder,
       addHealthScan,
       updateCategoryRatings,
+      logout,
       isDbSyncing,
       dbSyncProgress,
       dbSyncStatusText
@@ -384,6 +405,8 @@ export default function RootLayout() {
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="index" />
+          <Stack.Screen name="login" />
+          <Stack.Screen name="register" />
           <Stack.Screen name="location-permission" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="upload-photo" />

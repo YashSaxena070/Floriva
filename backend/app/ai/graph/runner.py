@@ -1,5 +1,5 @@
 """
-Runner utility for invoking the Plantify LangGraph workflow.
+Runner utility for invoking and resuming the Plantify LangGraph workflow.
 """
 
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class PlantifyGraphRunner:
     """
-    Executes the compiled LangGraph pipeline for plant scans.
+    Executes and resumes the compiled LangGraph pipeline for plant scans.
     """
 
     def __init__(self, db: Optional[Session] = None):
@@ -30,17 +30,17 @@ class PlantifyGraphRunner:
         initial_overrides: Optional[dict[str, Any]] = None,
     ) -> PlantifyGraphState:
         """
-        Execute the end-to-end graph workflow.
+        Execute the graph workflow until completion or an interrupt checkpoint.
 
         Args:
             user_id: ID of the user owning the scan
             plant_id: ID of the plant
-            scan_id: ID of the scan record
+            scan_id: ID of the scan record (used as thread_id for checkpointing)
             image_urls: List of image file paths or URLs
             initial_overrides: Optional pre-set state fields (e.g. known species)
 
         Returns:
-            Final PlantifyGraphState after full pipeline execution.
+            PlantifyGraphState at termination or interrupt.
         """
         state = create_initial_state(
             user_id=user_id,
@@ -52,24 +52,79 @@ class PlantifyGraphRunner:
         if initial_overrides:
             state.update(initial_overrides)
 
-        config = {}
+        thread_id = scan_id or f"{user_id}_{plant_id}"
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
         if self.db:
-            config["configurable"] = {"db": self.db}
+            config["configurable"]["db"] = self.db
 
         logger.info(
-            "Running PlantifyGraph for scan_id=%s, plant_id=%s with %d image(s)",
-            scan_id, plant_id, len(state.get("image_urls", [])),
+            "Running PlantifyGraph for scan_id=%s, thread_id=%s with %d image(s)",
+            scan_id, thread_id, len(state.get("image_urls", [])),
         )
 
         result_state = await self.graph.ainvoke(state, config=config)
 
         logger.info(
-            "PlantifyGraph execution finished for scan_id=%s. Errors: %d, Messages: %d",
+            "PlantifyGraph execution paused or finished for scan_id=%s. Errors: %d, Messages: %d",
             scan_id,
             len(result_state.get("errors", [])),
             len(result_state.get("messages", [])),
         )
 
+        return result_state
+
+    async def resume(
+        self,
+        scan_id: str,
+        user_id: str = "",
+        action: str = "approve",  # "approve" or "decline"
+    ) -> PlantifyGraphState:
+        """
+        Resume an interrupted graph from the checkpoint after user confirmation.
+
+        Args:
+            scan_id: The scan ID / thread_id of the paused workflow
+            user_id: The authenticated user's ID
+            action: User's decision ('approve' or 'decline')
+
+        Returns:
+            Final PlantifyGraphState after running through add_to_cart -> END.
+        """
+        thread_id = scan_id
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+        if self.db:
+            config["configurable"]["db"] = self.db
+
+        confirmation_status = "approved" if action == "approve" else "declined"
+        state_update = {
+            "cart_confirmation": confirmation_status,
+        }
+        if action == "decline":
+            state_update["cart_action"] = "skip"
+
+        logger.info(
+            "Resuming PlantifyGraph for thread_id=%s with confirmation=%s",
+            thread_id, confirmation_status,
+        )
+
+        # Update state at the checkpoint
+        await self.graph.aupdate_state(config, state_update, as_node="cart_decision")
+
+        # Resume execution (passing None input continues from current state)
+        result_state = await self.graph.ainvoke(None, config=config)
+
+        logger.info(
+            "PlantifyGraph resume finished for scan_id=%s",
+            scan_id,
+        )
         return result_state
 
 
@@ -90,3 +145,4 @@ async def run_pipeline(
         image_urls=image_urls,
         initial_overrides=initial_overrides,
     )
+

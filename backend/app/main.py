@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config.settings import get_settings
 from app.middleware.error_handler import register_exception_handlers
-from app.routers import auth, plants, scans, products
+from app.routers import auth, plants, scans, products, cart, ai_chat
 
 settings = get_settings()
 
@@ -37,14 +37,19 @@ def create_app() -> FastAPI:
     origins = [
         settings.CLIENT_URL,
         "http://localhost:8081",
+        "http://localhost:8082",
         "http://localhost:19006",
         "http://localhost:19000",
         "exp://localhost:8081",
     ]
 
+    # Regex matching localhost on any port, Android emulator 10.0.2.2, and local LAN IPs
+    origin_regex = r"^https?://(localhost|127\.0\.0\.1|10\.0\.2\.2|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$"
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
+        allow_origin_regex=origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -67,6 +72,8 @@ def create_app() -> FastAPI:
     app.include_router(plants.router)
     app.include_router(scans.router)
     app.include_router(products.router)
+    app.include_router(cart.router)
+    app.include_router(ai_chat.router)
 
     # ── Health Check ──────────────────────────────────────────
     @app.get("/api/health", tags=["Health"])

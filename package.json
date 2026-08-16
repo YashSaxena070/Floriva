@@ -1,0 +1,28 @@
+{
+  "name": "plantify-monorepo",
+  "version": "1.0.0",
+  "description": "Plantify — AI Plant Identifier and Care Assistant",
+  "private": true,
+  "scripts": {
+    "dev": "npm run start-all",
+    "start-all": "powershell -ExecutionPolicy Bypass -File ./start-all.ps1",
+    "dev:backend": "cd backend && .\\.venv\\Scripts\\uvicorn app.main:app --reload --port 8000",
+    "dev:frontend": "cd Plantify_UI && npm run start",
+    "db:up": "cd backend && docker-compose up -d",
+    "db:down": "cd backend && docker-compose down",
+    "db:migrate": "cd backend && .\\.venv\\Scripts\\alembic upgrade head",
+    "db:seed": "cd backend && .\\.venv\\Scripts\\python -m app.scripts.seed_products",
+    "test:backend": "cd backend && .\\.venv\\Scripts\\pytest tests/ -v",
+    "test:frontend": "cd Plantify_UI && npx tsc --noEmit",
+    "test": "npm run test:backend && npm run test:frontend"
+  },
+  "keywords": [
+    "plantify",
+    "plant-identification",
+    "react-native",
+    "fastapi",
+    "ai"
+  ],
+  "author": "Plantify Team",
+  "license": "ISC"
+}

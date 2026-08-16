@@ -20,6 +20,14 @@ class UserLogin(BaseModel):
     password: str
 
 
+class GoogleAuthPayload(BaseModel):
+    """Schema for Google OAuth token authentication."""
+    token: str | None = None
+    email: EmailStr | None = None
+    name: str | None = None
+    google_id: str | None = None
+
+
 class UserResponse(BaseModel):
     """Schema for user data in API responses."""
     id: uuid.UUID

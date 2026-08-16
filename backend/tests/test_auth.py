@@ -151,3 +151,46 @@ class TestGetMe:
             headers={"Authorization": "Bearer invalid-token-here"},
         )
         assert response.status_code == 401
+
+
+class TestGoogleAuth:
+    """Tests for POST /api/auth/google"""
+
+    def test_google_auth_new_user(self, client: TestClient):
+        """Google OAuth registers and authenticates a new user."""
+        response = client.post(
+            "/api/auth/google",
+            json={
+                "email": "google.user@gmail.com",
+                "name": "Google User",
+                "google_id": "google_123456",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "access_token" in data["data"]
+        assert data["data"]["user"]["email"] == "google.user@gmail.com"
+        assert data["data"]["user"]["name"] == "Google User"
+
+    def test_google_auth_existing_user(
+        self, client: TestClient, test_user_data: dict
+    ):
+        """Google OAuth authenticates an existing registered user."""
+        # Register user with password first
+        client.post("/api/auth/register", json=test_user_data)
+
+        # Login with Google OAuth using same email
+        response = client.post(
+            "/api/auth/google",
+            json={
+                "email": test_user_data["email"],
+                "name": test_user_data["name"],
+                "google_id": "google_987654",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "access_token" in data["data"]
+        assert data["data"]["user"]["email"] == test_user_data["email"]

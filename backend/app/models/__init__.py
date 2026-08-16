@@ -11,6 +11,7 @@ from app.models.health_analysis import HealthAnalysis
 from app.models.identification_result import IdentificationResult
 from app.models.care_recommendation import CareRecommendation
 from app.models.product import Category, Product, ProductCompatibility
+from app.models.cart import Cart, CartItem
 
 __all__ = [
     "Base",
@@ -26,6 +27,9 @@ __all__ = [
     "Category",
     "Product",
     "ProductCompatibility",
+    "Cart",
+    "CartItem",
 ]
+
 
 

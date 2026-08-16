@@ -29,6 +29,271 @@ from app.models.plant import Plant
 logger = logging.getLogger(__name__)
 
 
+# ── 0. Load Plant Context Node (Plant Memory) ─────────────────────
+
+
+async def load_plant_context_node(
+    state: PlantifyGraphState,
+    config: Optional[RunnableConfig] = None,
+) -> dict[str, Any]:
+    """
+    Loads the complete plant memory context at the start of the workflow.
+
+    Retrieves and populates state with:
+    - Plant identity (name, scientific name, confidence, primary image)
+    - Scan history (last 10 scans with identification, health analysis, care plans)
+    - Health summary (status distribution, common issues, severity trends)
+    - Treatment summary (treatment history, product categories recommended)
+    - Cart history (purchased/recommended products from previous scans)
+    - Plant images (all uploaded images for this plant)
+
+    This node runs first so all subsequent nodes have access to the plant's
+    complete history for contextual reasoning.
+    """
+    plant_id_str = state.get("plant_id")
+    user_id_str = state.get("user_id")
+    scan_id_str = state.get("scan_id")
+
+    if not plant_id_str:
+        logger.info("Node[load_plant_context]: No plant_id provided, skipping context load.")
+        return {"messages": ["No plant ID provided; starting fresh analysis."]}
+
+    db = None
+    close_db = False
+    if config and "configurable" in config and "db" in config["configurable"]:
+        db = config["configurable"]["db"]
+    else:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        import uuid as uuid_mod
+        plant_uuid = uuid_mod.UUID(plant_id_str)
+
+        # Import models here to avoid circular imports
+        from app.models.plant import Plant
+        from app.models.plant_scan import PlantScan
+        from app.models.health_analysis import HealthAnalysis
+        from app.models.identification_result import IdentificationResult
+        from app.models.care_recommendation import CareRecommendation
+        from app.models.plant_image import PlantImage
+        from app.models.cart import Cart, CartItem
+        from app.models.product import Product
+        from sqlalchemy.orm import joinedload
+        from sqlalchemy import desc
+
+        # Fetch plant
+        plant = db.query(Plant).filter(Plant.id == plant_uuid).first()
+        if not plant:
+            logger.warning("Node[load_plant_context]: Plant %s not found", plant_id_str)
+            return {"messages": [f"Plant {plant_id_str} not found."]}
+
+        # Fetch scans with full relationships
+        scans = (
+            db.query(PlantScan)
+            .options(
+                joinedload(PlantScan.health_analyses),
+                joinedload(PlantScan.identification_result),
+                joinedload(PlantScan.care_recommendation),
+            )
+            .filter(PlantScan.plant_id == plant_uuid)
+            .order_by(desc(PlantScan.created_at))
+            .limit(10)
+            .all()
+        )
+
+        # Serialize scans
+        scan_history = []
+        health_statuses = []
+        issues = []
+        severities = []
+        treatments = []
+        products_recommended = []
+
+        for scan in scans:
+            scan_data = {
+                "scan_id": str(scan.id),
+                "image_url": scan.image_url,
+                "status": scan.status.value,
+                "created_at": scan.created_at.isoformat() if scan.created_at else None,
+                "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+                "identification": None,
+                "health_analyses": [],
+                "care_recommendation": None,
+            }
+
+            if scan.identification_result:
+                ir = scan.identification_result
+                scan_data["identification"] = {
+                    "common_name": ir.common_name,
+                    "scientific_name": ir.scientific_name,
+                    "family": ir.family,
+                    "genus": ir.genus,
+                    "confidence": ir.confidence,
+                    "common_names": ir.common_names,
+                    "alternatives": ir.alternatives,
+                    "provider": ir.provider,
+                    "created_at": ir.created_at.isoformat() if ir.created_at else None,
+                }
+
+            for ha in scan.health_analyses or []:
+                scan_data["health_analyses"].append({
+                    "health_status": ha.health_status,
+                    "issue": ha.issue,
+                    "confidence": ha.confidence,
+                    "severity": ha.severity,
+                    "symptoms": ha.symptoms,
+                    "possible_causes": ha.possible_causes,
+                    "created_at": ha.created_at.isoformat() if ha.created_at else None,
+                })
+                if ha.health_status:
+                    health_statuses.append(ha.health_status)
+                if ha.issue and ha.issue != "No issues detected":
+                    issues.append(ha.issue)
+                if ha.severity:
+                    severities.append(ha.severity)
+
+            if scan.care_recommendation:
+                cr = scan.care_recommendation
+                scan_data["care_recommendation"] = {
+                    "summary": cr.summary,
+                    "care_data": cr.care_data,
+                    "problem_detected": cr.problem_detected,
+                    "problem_category": cr.problem_category,
+                    "problem_severity": cr.problem_severity,
+                    "treatment_data": cr.treatment_data,
+                    "provider": cr.provider,
+                    "created_at": cr.created_at.isoformat() if cr.created_at else None,
+                }
+                # Extract treatment info
+                if cr.treatment_data and cr.treatment_data.get("required"):
+                    treatments.append({
+                        "scan_id": str(scan.id),
+                        "date": scan.created_at.isoformat() if scan.created_at else None,
+                        "problem_category": cr.problem_category,
+                        "problem_severity": cr.problem_severity,
+                        "product_category": cr.treatment_data.get("product_category"),
+                        "recommended_actions": cr.treatment_data.get("recommended_actions", []),
+                        "frequency": cr.treatment_data.get("frequency"),
+                        "duration": cr.treatment_data.get("estimated_duration"),
+                    })
+                if cr.treatment_data and cr.treatment_data.get("product_category"):
+                    products_recommended.append(cr.treatment_data["product_category"])
+
+            scan_history.append(scan_data)
+
+        # Build health summary
+        status_counts = {}
+        for s in health_statuses:
+            status_counts[s] = status_counts.get(s, 0) + 1
+
+        issue_counts = {}
+        for i in issues:
+            issue_counts[i] = issue_counts.get(i, 0) + 1
+
+        severity_counts = {}
+        for s in severities:
+            severity_counts[s] = severity_counts.get(s, 0) + 1
+
+        health_summary = {
+            "total_health_checks": len(health_statuses),
+            "status_distribution": status_counts,
+            "common_issues": dict(sorted(issue_counts.items(), key=lambda x: x[1], reverse=True)[:5]),
+            "severity_distribution": severity_counts,
+            "latest_status": health_statuses[0] if health_statuses else None,
+            "latest_issue": issues[0] if issues else None,
+        }
+
+        # Build treatment summary
+        product_cat_counts = {}
+        for p in products_recommended:
+            product_cat_counts[p] = product_cat_counts.get(p, 0) + 1
+
+        treatment_summary = {
+            "total_treatments": len(treatments),
+            "treatments": treatments[:5],
+            "product_categories_recommended": product_cat_counts,
+        }
+
+        # Fetch cart items for this plant
+        plant_scan_ids = [uuid_mod.UUID(s["scan_id"]) for s in scan_history]
+        cart_history = []
+        if plant_scan_ids:
+            cart_items = (
+                db.query(CartItem)
+                .join(CartItem.cart)
+                .join(CartItem.product)
+                .options(joinedload(CartItem.product).joinedload(Product.category))
+                .filter(CartItem.scan_id.in_(plant_scan_ids))
+                .order_by(desc(CartItem.created_at))
+                .all()
+            )
+            for item in cart_items:
+                product = item.product
+                cart_history.append({
+                    "cart_item_id": str(item.id),
+                    "product_id": str(item.product_id),
+                    "product_name": product.name if product else "Unknown",
+                    "product_brand": product.brand if product else None,
+                    "product_category": product.category.name if product and product.category else None,
+                    "price_at_addition": float(item.price_at_addition),
+                    "quantity": item.quantity,
+                    "recommendation_reason": item.recommendation_reason,
+                    "scan_id": str(item.scan_id) if item.scan_id else None,
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
+                })
+
+        # Fetch plant images
+        images = db.query(PlantImage).filter(PlantImage.plant_id == plant_uuid).order_by(desc(PlantImage.created_at)).all()
+        plant_images = [{
+            "image_id": str(img.id),
+            "image_url": img.image_url,
+            "image_type": img.image_type,
+            "created_at": img.created_at.isoformat() if img.created_at else None,
+        } for img in images]
+
+        # Build plant identity
+        primary_image = plant.image_url or (plant_images[0]["image_url"] if plant_images else "")
+
+        logger.info(
+            "Node[load_plant_context]: Loaded context for plant %s — scans=%d, health_checks=%d, treatments=%d, cart_items=%d, images=%d",
+            plant_id_str,
+            len(scan_history),
+            len(health_statuses),
+            len(treatments),
+            len(cart_history),
+            len(plant_images),
+        )
+
+        return {
+            "plant_name": plant.name,
+            "plant_scientific_name": plant.scientific_name or "",
+            "plant_identification_confidence": plant.identification_confidence or 0.0,
+            "plant_primary_image": primary_image,
+            "scan_history": scan_history,
+            "health_summary": health_summary,
+            "treatment_summary": treatment_summary,
+            "cart_history": cart_history,
+            "plant_images": plant_images,
+            "messages": [
+                f"Loaded plant context: {plant.name} ({len(scan_history)} scans, "
+                f"{len(health_statuses)} health checks, {len(treatments)} treatments, "
+                f"{len(cart_history)} cart items, {len(plant_images)} images)."
+            ],
+        }
+
+    except Exception as e:
+        err = f"Failed to load plant context: {str(e)}"
+        logger.exception("Node[load_plant_context]: %s", err)
+        return {
+            "errors": [err],
+            "messages": ["Failed to load plant history context."],
+        }
+    finally:
+        if close_db and db:
+            db.close()
+
+
 def _resolve_image_path(image_url: str) -> str:
     """Normalize web URL or relative path to disk path."""
     if not image_url:
@@ -440,67 +705,75 @@ async def plant_analysis_node(
     Generates personalized care instructions and structured treatment plan
     using LLM reasoning grounded in the PlantKnowledgeRetriever reference data.
     1. Combines plant identification, health diagnosis, and retrieved knowledge context.
-    2. Validates LLM output with PlantCarePlan and AIAnalysisResponse schemas.
-    3. Persists result to CareRecommendation database table.
-    4. Updates LangGraph state.
+    2. Uses plant memory (scan_history, health_summary, treatment_summary) from load_plant_context.
+    3. Validates LLM output with PlantCarePlan and AIAnalysisResponse schemas.
+    4. Persists result to CareRecommendation database table.
+    5. Updates LangGraph state.
     """
     from app.ai.schemas.care import PlantCarePlan, AIAnalysisResponse
     from app.ai.services.knowledge_service import PlantKnowledgeRetriever
-
-    plant_species = state.get("plant_species") or "Unknown Plant"
-    scientific_name = state.get("scientific_name") or ""
-    health_status = state.get("health_status", "healthy")
-    disease = state.get("disease") or "No issues detected"
-    severity = state.get("severity", "none")
-    symptoms = state.get("symptoms", [])
-    causes = state.get("possible_causes", [])
-
-    plant_data = {
-        "name": plant_species,
-        "scientific_name": scientific_name,
-    }
-
-    health_data = None
-    if health_status in ("warning", "diseased"):
-        health_data = {
-            "health_status": health_status,
-            "issue": disease,
-            "confidence": state.get("disease_confidence", 0.0),
-            "severity": severity,
-            "symptoms": symptoms,
-            "possible_causes": causes,
-        }
-
-    # Retrieve scan history if plant_id & DB session are available
-    scan_history = []
-    scan_id_str = state.get("scan_id")
-    plant_id_str = state.get("plant_id")
 
     db = None
     close_db = False
     if config and "configurable" in config and "db" in config["configurable"]:
         db = config["configurable"]["db"]
-    elif scan_id_str or plant_id_str:
+    else:
         db = SessionLocal()
         close_db = True
 
+    scan_id_str = state.get("scan_id")
+
     try:
-        if db and plant_id_str:
-            try:
-                scan_repo = ScanRepository(db)
-                history_scans = scan_repo.list_by_plant_id(uuid.UUID(plant_id_str))
-                for prev_scan in history_scans[:5]:
-                    if scan_id_str and str(prev_scan.id) == scan_id_str:
-                        continue
-                    if prev_scan.health_analyses:
-                        latest_ha = prev_scan.health_analyses[-1]
-                        scan_history.append({
-                            "scan_date": str(prev_scan.created_at),
-                            "health_status": latest_ha.health_status,
-                            "issue": latest_ha.issue,
-                        })
-            except Exception as hist_err:
-                logger.warning("Node[plant_analysis]: History lookup error: %s", hist_err)
+        plant_species = state.get("plant_species") or "Unknown Plant"
+        scientific_name = state.get("scientific_name") or ""
+        health_status = state.get("health_status", "healthy")
+        disease = state.get("disease") or "No issues detected"
+        severity = state.get("severity", "none")
+        symptoms = state.get("symptoms", [])
+        causes = state.get("possible_causes", [])
+
+        plant_data = {
+            "name": plant_species,
+            "scientific_name": scientific_name,
+        }
+
+        health_data = None
+        if health_status in ("warning", "diseased"):
+            health_data = {
+                "health_status": health_status,
+                "issue": disease,
+                "confidence": state.get("disease_confidence", 0.0),
+                "severity": severity,
+                "symptoms": symptoms,
+                "possible_causes": causes,
+            }
+
+        # Use plant memory from load_plant_context_node instead of re-querying
+        scan_history = state.get("scan_history", [])
+        health_summary = state.get("health_summary", {})
+        treatment_summary = state.get("treatment_summary", {})
+
+        # Build scan history for LLM context (simplified format)
+        llm_scan_history = []
+        for scan in scan_history[:5]:
+            # Skip current scan if it matches
+            if state.get("scan_id") and scan.get("scan_id") == state.get("scan_id"):
+                continue
+            latest_health = None
+            if scan.get("health_analyses"):
+                latest_health = scan["health_analyses"][-1]
+            llm_scan_history.append({
+                "scan_date": scan.get("created_at"),
+                "health_status": latest_health.get("health_status") if latest_health else None,
+                "issue": latest_health.get("issue") if latest_health else None,
+            })
+
+        logger.info(
+            "Node[plant_analysis]: Using plant memory — scans=%d, health_checks=%d, treatments=%d",
+            len(scan_history),
+            health_summary.get("total_health_checks", 0),
+            treatment_summary.get("total_treatments", 0),
+        )
 
         # Grounding: Retrieve validated reference knowledge
         retriever = PlantKnowledgeRetriever()
@@ -515,7 +788,7 @@ async def plant_analysis_node(
         raw_analysis = await service.analyze(
             plant_data=plant_data,
             health_data=health_data,
-            scan_history=scan_history if scan_history else None,
+            scan_history=llm_scan_history if llm_scan_history else None,
         )
 
         # Pydantic Schema Validation Firewall
@@ -564,7 +837,6 @@ async def plant_analysis_node(
                     summary=validated_analysis.summary,
                     care_data=care_dict,
                     problem_detected=problem_details.detected,
-                    problem_name=problem_details.name,
                     problem_category=problem_cat,
                     problem_severity=problem_details.severity,
                     treatment_data=treatment_dict,
@@ -686,8 +958,29 @@ async def product_recommendation_node(
     config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """
-    Queries real database products and runs the 7-step compatibility and ranking pipeline.
+    Recommends real products using a LangChain tool-calling agent.
+
+    Pipeline:
+        Treatment Requirement (from state)
+        → Agent calls search_products tool
+        → Agent calls get_compatible_products tool
+        → Agent calls check_product_stock tool
+        → Agent calls get_product for details
+        → Agent ranks candidates and generates explanations
+        → Returns up to 3 recommendations (best, budget, premium)
+
+    CRITICAL RULE:
+        The LLM is NOT the source of product truth.
+        Database = product truth (names, IDs, prices, stock).
+        LLM = reasoning, ranking, and explanation.
+
+    Uses plant memory (cart_history, treatment_summary) to avoid
+    recommending already-purchased products and to inform selection.
+
+    Falls back to the direct RecommendationPipeline if the agent fails.
     """
+    from app.ai.agents.product_agent import ProductRecommendationAgent
+
     db = None
     close_db = False
     if config and "configurable" in config and "db" in config["configurable"]:
@@ -696,36 +989,133 @@ async def product_recommendation_node(
         db = SessionLocal()
         close_db = True
 
+    required_product_category = state.get("required_product_category", "")
+    plant_species = state.get("plant_species", "")
+    problem_category = state.get("problem_category", "healthy")
+    severity = state.get("severity", "none")
+    treatment_reason = state.get("treatment_reason", "")
+
+    # Extract plant memory for context
+    cart_history = state.get("cart_history", [])
+    treatment_summary = state.get("treatment_summary", {})
+
+    # Build previously purchased product IDs to avoid re-recommending
+    purchased_product_ids = set()
+    for item in cart_history:
+        if item.get("product_id"):
+            purchased_product_ids.add(item["product_id"])
+
+    # Build previously recommended product categories
+    prev_recommended_categories = treatment_summary.get("product_categories_recommended", {})
+
+    logger.info(
+        "Node[product_recommendation]: Plant memory — purchased_products=%d, prev_categories=%s",
+        len(purchased_product_ids),
+        prev_recommended_categories,
+    )
+
+    try:
+        # ── Primary Path: LangChain Tool-Calling Agent ──────────
+        agent = ProductRecommendationAgent(db=db)
+        agent_result = await agent.recommend(
+            required_product_category=required_product_category,
+            plant_species=plant_species,
+            problem_category=problem_category,
+            severity=severity,
+            treatment_reason=treatment_reason,
+        )
+
+        recommended_list = agent_result.to_recommended_products_list()
+        status = agent_result.status
+
+        # Filter out already purchased products
+        if recommended_list and purchased_product_ids:
+            filtered_list = []
+            for rec in recommended_list:
+                pid = rec.get("product_id")
+                if pid and pid not in purchased_product_ids:
+                    filtered_list.append(rec)
+            recommended_list = filtered_list
+            logger.info(
+                "Node[product_recommendation]: Filtered out purchased products. "
+                "Remaining: %d",
+                len(recommended_list),
+            )
+
+        logger.info(
+            "Node[product_recommendation]: Agent completed. status=%s, "
+            "recommendations=%d, reasoning=%s",
+            status,
+            len(recommended_list),
+            agent_result.reasoning[:200] if agent_result.reasoning else "N/A",
+        )
+
+        if recommended_list:
+            return {
+                "recommended_products": recommended_list,
+                "product_candidates": recommended_list,
+                "messages": [
+                    f"Agent recommended {len(recommended_list)} product(s). "
+                    f"Status: {status}"
+                ],
+            }
+
+        # Agent found no products — try fallback pipeline
+        logger.info(
+            "Node[product_recommendation]: Agent returned no products, "
+            "attempting fallback pipeline."
+        )
+
+    except Exception as agent_err:
+        logger.warning(
+            "Node[product_recommendation]: Agent failed (%s), "
+            "falling back to direct pipeline.",
+            str(agent_err),
+        )
+
+    # ── Fallback Path: Direct RecommendationPipeline ────────────
     try:
         pipeline = RecommendationPipeline(db)
         treatment_data = {
-            "product_category": state.get("required_product_category", ""),
+            "product_category": required_product_category,
             "required": state.get("treatment_required", False),
         }
 
         result = pipeline.run(
             treatment_data=treatment_data,
-            problem_category=state.get("problem_category", "healthy"),
-            problem_severity=state.get("severity", "none"),
-            plant_species=state.get("plant_species", ""),
+            problem_category=problem_category,
+            problem_severity=severity,
+            plant_species=plant_species,
         )
 
         recommended_list = []
         for rec in result.recommendations:
             recommended_list.append(rec.model_dump(mode="json"))
 
+        # Filter out already purchased products
+        if recommended_list and purchased_product_ids:
+            filtered_list = []
+            for rec in recommended_list:
+                pid = rec.get("product_id")
+                if pid and pid not in purchased_product_ids:
+                    filtered_list.append(rec)
+            recommended_list = filtered_list
+
         logger.info(
-            "Node[product_recommendation]: Found %d product recommendation(s)",
+            "Node[product_recommendation]: Fallback pipeline found %d "
+            "product recommendation(s)",
             len(recommended_list),
         )
 
         return {
             "recommended_products": recommended_list,
             "product_candidates": recommended_list,
-            "messages": [f"Recommended {len(recommended_list)} product(s)."],
+            "messages": [
+                f"Fallback pipeline recommended {len(recommended_list)} product(s)."
+            ],
         }
     except Exception as e:
-        err = f"Product recommendation failed: {str(e)}"
+        err = f"Product recommendation failed (both agent and pipeline): {str(e)}"
         logger.exception("Node[product_recommendation]: %s", err)
         return {
             "errors": [err],
@@ -746,20 +1136,91 @@ async def cart_decision_node(
     config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """
-    Evaluates cart action. In this stage, products are suggested only (no cart yet).
-    """
-    recs = state.get("recommended_products") or []
-    if recs:
-        action = "suggested"
-        msg = f"Suggested {len(recs)} product(s) to user for treatment."
-    else:
-        action = "none"
-        msg = "No product recommendations to add or suggest."
+    Examines recommended products and prepares a cart proposal.
 
-    logger.info("Node[cart_decision]: cart_action=%s", action)
+    Picks the best recommendation and generates a cart decision payload
+    for the frontend to display to the user.
+
+    Output cart_decision_data:
+    {
+        "recommended_product_id": "uuid",
+        "recommended_product_name": "Product Name",
+        "recommended_product_price": 299.00,
+        "recommended_product_image": "url",
+        "recommended_product_brand": "Brand",
+        "quantity": 1,
+        "reason": "Recommended for the detected nutrient deficiency.",
+        "requires_user_confirmation": true,
+        "buy_links": [...]
+    }
+    """
+    from app.services.cart_service import generate_buy_links
+
+    recs = state.get("recommended_products") or []
+
+    if not recs:
+        logger.info("Node[cart_decision]: No products to recommend for cart.")
+        return {
+            "cart_action": "none",
+            "cart_decision_data": {},
+            "messages": ["No product recommendations available for cart."],
+        }
+
+    # Pick the best recommendation (first in list = highest scored)
+    best = recs[0]
+
+    # Extract product details — handle both agent output and pipeline output formats
+    product_id = best.get("product_id") or ""
+    product_name = best.get("name") or ""
+    product_price = best.get("price", 0.0)
+    product_image = best.get("product_image_url") or ""
+    product_brand = best.get("product_brand") or ""
+    reason = best.get("reason") or best.get("recommendation_reason") or "Recommended based on AI analysis."
+
+    # If the product data is nested under a "product" key (pipeline format)
+    if "product" in best and isinstance(best["product"], dict):
+        p = best["product"]
+        product_id = str(p.get("id", product_id))
+        product_name = p.get("name", product_name)
+        product_price = p.get("price", product_price)
+        product_image = p.get("image_url", product_image)
+        product_brand = p.get("brand", product_brand)
+
+    # Generate external buy links
+    buy_links_list = generate_buy_links(
+        product_name=product_name,
+        brand=product_brand if product_brand else None,
+    )
+    buy_links_dicts = [link.model_dump() for link in buy_links_list]
+
+    decision = {
+        "recommended_product_id": str(product_id),
+        "recommended_product_name": product_name,
+        "recommended_product_price": float(product_price),
+        "recommended_product_image": product_image,
+        "recommended_product_brand": product_brand,
+        "quantity": 1,
+        "reason": reason,
+        "requires_user_confirmation": True,
+        "buy_links": buy_links_dicts,
+        "scan_id": state.get("scan_id", ""),
+    }
+
+    logger.info(
+        "Node[cart_decision]: Prepared cart proposal for '%s' (₹%.2f). "
+        "Awaiting user confirmation.",
+        product_name, float(product_price),
+    )
+
     return {
-        "cart_action": action,
-        "messages": [msg],
+        "cart_action": "add",
+        "cart_decision_data": decision,
+        "cart_confirmation": "pending",
+        "buy_links": buy_links_dicts,
+        "messages": [
+            f"Cart decision: recommending '{product_name}' for ₹{float(product_price):.2f}. "
+            f"Awaiting user confirmation."
+        ],
     }
 
 
@@ -771,12 +1232,56 @@ async def human_confirmation_node(
     config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """
-    Human-in-the-loop confirmation point for cart or treatment approvals.
-    Pass-through in automated execution.
+    Human-in-the-loop confirmation checkpoint.
+
+    This node is the INTERRUPT point in the graph. When the graph
+    reaches this node:
+
+    1. FIRST RUN (cart_confirmation="pending"):
+       The graph pauses (via interrupt_before). The current state
+       is persisted by the checkpointer. The API returns the
+       cart_decision_data to the frontend for the user to see.
+
+    2. RESUME (cart_confirmation="approved" or "declined"):
+       The API calls graph.update_state() with the user's decision
+       then resumes. This node reads the updated confirmation.
+
+    Frontend displays:
+        "Recommended for your plant:
+         Product Name — ₹299
+         Reason: ...
+         [Add to Cart] [View Details] [Not Now]"
     """
-    logger.info("Node[human_confirmation]: Confirmation passed.")
+    confirmation = state.get("cart_confirmation", "pending")
+    cart_action = state.get("cart_action", "none")
+
+    if cart_action == "none":
+        logger.info("Node[human_confirmation]: No cart action needed.")
+        return {
+            "cart_confirmation": "declined",
+            "messages": ["No cart action to confirm."],
+        }
+
+    if confirmation == "approved":
+        logger.info("Node[human_confirmation]: User APPROVED cart addition.")
+        return {
+            "cart_confirmation": "approved",
+            "messages": ["User approved adding the recommended product to cart."],
+        }
+
+    if confirmation == "declined":
+        logger.info("Node[human_confirmation]: User DECLINED cart addition.")
+        return {
+            "cart_confirmation": "declined",
+            "cart_action": "skip",
+            "messages": ["User declined the product recommendation."],
+        }
+
+    # Still pending — this state is returned to the frontend
+    logger.info("Node[human_confirmation]: Confirmation pending, awaiting user input.")
     return {
-        "messages": ["Human confirmation step passed."],
+        "cart_confirmation": "pending",
+        "messages": ["Awaiting user confirmation for cart addition."],
     }
 
 
@@ -788,9 +1293,103 @@ async def add_to_cart_node(
     config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """
-    Placeholder/stub node for future shopping cart addition.
+    Adds the recommended product to the user's cart.
+
+    Only executes if cart_confirmation = "approved".
+    Uses the CartService to validate and add the product with
+    the real price from the database.
+
+    After adding, generates external buy links so the user can
+    purchase from Amazon, Flipkart, Google Shopping, etc.
     """
-    logger.info("Node[add_to_cart]: Cart action completed (stub).")
-    return {
-        "messages": ["Cart addition step completed."],
-    }
+    from app.services.cart_service import CartService, generate_buy_links
+
+    confirmation = state.get("cart_confirmation", "pending")
+
+    if confirmation != "approved":
+        logger.info(
+            "Node[add_to_cart]: Skipped — confirmation=%s",
+            confirmation,
+        )
+        return {
+            "cart_item_added": {},
+            "messages": [f"Cart addition skipped (confirmation={confirmation})."],
+        }
+
+    decision = state.get("cart_decision_data") or {}
+    product_id_str = decision.get("recommended_product_id")
+    user_id_str = state.get("user_id")
+    scan_id_str = state.get("scan_id")
+
+    if not product_id_str or not user_id_str:
+        err = "Cannot add to cart: missing product_id or user_id."
+        logger.warning("Node[add_to_cart]: %s", err)
+        return {
+            "errors": [err],
+            "cart_item_added": {},
+            "messages": [err],
+        }
+
+    db = None
+    close_db = False
+    if config and "configurable" in config and "db" in config["configurable"]:
+        db = config["configurable"]["db"]
+    else:
+        db = SessionLocal()
+        close_db = True
+
+    try:
+        cart_service = CartService(db)
+        import uuid as uuid_mod
+        user_uuid = uuid_mod.UUID(user_id_str)
+        product_uuid = uuid_mod.UUID(product_id_str)
+        scan_uuid = uuid_mod.UUID(scan_id_str) if scan_id_str else None
+
+        item_response = cart_service.add_item(
+            user_id=user_uuid,
+            product_id=product_uuid,
+            quantity=decision.get("quantity", 1),
+            recommendation_reason=decision.get("reason", ""),
+            scan_id=scan_uuid,
+        )
+
+        item_data = item_response.model_dump(mode="json")
+
+        logger.info(
+            "Node[add_to_cart]: Successfully added '%s' to cart for user %s. "
+            "%d buy links generated.",
+            item_response.product_name,
+            user_id_str,
+            len(item_response.buy_links),
+        )
+
+        return {
+            "cart_item_added": item_data,
+            "buy_links": [link.model_dump() for link in item_response.buy_links],
+            "messages": [
+                f"Added '{item_response.product_name}' to cart "
+                f"(₹{item_response.price_at_addition:.2f}). "
+                f"{len(item_response.buy_links)} external buy links available."
+            ],
+        }
+
+    except ValueError as e:
+        err = f"Cart addition validation failed: {str(e)}"
+        logger.warning("Node[add_to_cart]: %s", err)
+        return {
+            "errors": [err],
+            "cart_item_added": {},
+            "messages": [err],
+        }
+    except Exception as e:
+        err = f"Cart addition failed: {str(e)}"
+        logger.exception("Node[add_to_cart]: %s", err)
+        return {
+            "errors": [err],
+            "cart_item_added": {},
+            "messages": ["Cart addition encountered an error."],
+        }
+    finally:
+        if close_db and db:
+            db.close()
+
