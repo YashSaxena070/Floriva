@@ -28,7 +28,7 @@ const { width } = Dimensions.get('window');
 export default function RegisterScreen() {
   const router = useRouter();
   const { action } = useLocalSearchParams<{ action?: string }>();
-  const { setUserName, setUserEmail } = useUser();
+  const { setUserName, setUserEmail, refreshUserData } = useUser();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -78,12 +78,14 @@ export default function RegisterScreen() {
         setUserName(authData.user.name);
         setUserEmail(authData.user.email);
       }
+      await refreshUserData();
       // New user registered -> ask for location permission next
       navigateToLocationPermission();
     } catch (err: any) {
       console.warn('Backend registration failed, using local session fallback:', err);
       setUserName(fullName);
       setUserEmail(cleanEmail);
+      await refreshUserData();
       navigateToLocationPermission();
     } finally {
       setIsLoading(false);

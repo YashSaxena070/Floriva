@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View, Platform, TextInput, Alert, Modal } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View, Platform, TextInput, Alert, Modal, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useUser } from '../_layout';
@@ -47,10 +47,17 @@ const formatNextWatering = (nextWatering: string) => {
 
 export default function MyGardenScreen() {
   const router = useRouter();
-  const { savedPlants, removePlant, reminders } = useUser();
+  const { savedPlants, removePlant, reminders, refreshUserData, isLoadingUserData } = useUser();
   const [searchQuery, setSearchQuery] = useState('');
   const [plantToDelete, setPlantToDelete] = useState<any | null>(null);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await refreshUserData();
+    setIsRefreshing(false);
+  };
 
   const handleRemovePlant = (plant: any) => {
     setPlantToDelete(plant);
@@ -105,7 +112,18 @@ export default function MyGardenScreen() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing || isLoadingUserData}
+            onRefresh={handleRefresh}
+            colors={['#4E8C44']}
+            tintColor="#4E8C44"
+          />
+        }
+      >
         {filteredPlants.length === 0 ? (
           <View style={styles.emptyStateContainer}>
             <Image

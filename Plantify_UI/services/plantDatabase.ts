@@ -1,5 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
 export interface Plant {
   id: string;
   name: string;
@@ -461,28 +459,16 @@ const PLANT_DATASET: Plant[] = [
 ];
 
 /**
- * Simulates fetching plants from an API on login/launch and caching in AsyncStorage
+ * Returns plants category-wise directly from dataset.
  */
 export async function initializePlantDatabase(): Promise<void> {
-  try {
-    console.log('Initializing plant database cache...');
-    await AsyncStorage.setItem('@cached_plants', JSON.stringify(PLANT_DATASET));
-    console.log('Plant database stored successfully.');
-  } catch (err) {
-    console.error('Failed to initialize plant database:', err);
-  }
+  // In-memory dataset ready
 }
 
 /**
- * Gets cached plants category wise
+ * Gets plants category wise
  */
 export async function getPlantsByCategory(categoryName: string): Promise<Plant[]> {
-  try {
-    const data = await AsyncStorage.getItem('@cached_plants');
-    const plants: Plant[] = data ? JSON.parse(data) : PLANT_DATASET;
-    return plants.filter((p) => p.category.toLowerCase() === categoryName.toLowerCase());
-  } catch (err) {
-    console.warn('Failed to retrieve cached plants:', err);
-    return PLANT_DATASET.filter((p) => p.category.toLowerCase() === categoryName.toLowerCase());
-  }
+  return PLANT_DATASET.filter((p) => p.category.toLowerCase() === categoryName.toLowerCase());
 }
+

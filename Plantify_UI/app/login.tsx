@@ -29,7 +29,7 @@ const { width } = Dimensions.get('window');
 export default function LoginScreen() {
   const router = useRouter();
   const { action } = useLocalSearchParams<{ action?: string }>();
-  const { setUserName, setUserEmail } = useUser();
+  const { setUserName, setUserEmail, refreshUserData } = useUser();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -81,6 +81,7 @@ export default function LoginScreen() {
         setUserName(authData.user.name || cleanEmail.split('@')[0]);
         setUserEmail(authData.user.email);
       }
+      await refreshUserData();
       await navigateAfterAuth();
     } catch (err: any) {
       console.warn('Backend login failed, attempting demo/offline fallback:', err);
@@ -88,6 +89,7 @@ export default function LoginScreen() {
       const fallbackName = cleanEmail.split('@')[0];
       setUserName(fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1));
       setUserEmail(cleanEmail);
+      await refreshUserData();
       await navigateAfterAuth();
     } finally {
       setIsLoading(false);

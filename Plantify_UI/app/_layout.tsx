@@ -5,13 +5,17 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { api } from '@/services/api';
+import { api, PlantData } from '@/services/api';
 import { plantService } from '@/services/plantService';
 import { resolveLocalUri } from '@/services/uriHelper';
+
+// Helper to check if string is a valid UUID
+const isUUID = (str: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
 // Create User Context
 export const UserContext = createContext({
@@ -21,11 +25,11 @@ export const UserContext = createContext({
   setScansCount: (count: number) => { },
   userAvatar: null as string | null,
   setUserAvatar: (avatar: string) => { },
-  userEmail: 'alina.smith@gmail.com',
+  userEmail: '',
   setUserEmail: (email: string) => { },
   savedPlants: [] as any[],
-  savePlant: (plant: any) => { },
-  removePlant: (id: string) => { },
+  savePlant: async (plant: any): Promise<void> => { },
+  removePlant: async (id: string): Promise<void> => { },
   recentScans: [] as any[],
   addRecentScan: (scan: any) => { },
   removeRecentScan: (id: string) => { },
@@ -34,6 +38,8 @@ export const UserContext = createContext({
   addHealthScan: (plantName: string, score: number, imageUri?: string, categoryRatings?: any) => { },
   updateCategoryRatings: (plantName: string, ratings: any) => { },
   logout: async () => { },
+  refreshUserData: async () => { },
+  isLoadingUserData: false,
   isDbSyncing: false,
   dbSyncProgress: 0,
   dbSyncStatusText: '',
@@ -54,17 +60,18 @@ export default function RootLayout() {
   const [userName, setUserName] = useState('User');
   const [scansCount, setScansCount] = useState(0);
   const [userAvatar, setUserAvatar] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState('alina.smith@gmail.com');
+  const [userEmail, setUserEmail] = useState('');
   const [savedPlants, setSavedPlants] = useState<any[]>([]);
   const [recentScans, setRecentScans] = useState<any[]>([]);
   const [reminders, setReminders] = useState<any[]>([]);
+  const [isLoadingUserData, setIsLoadingUserData] = useState(false);
 
-  // Syncing states
+  // Syncing states for SQLite catalog
   const [isDbSyncing, setIsDbSyncing] = useState(false);
   const [dbSyncProgress, setDbSyncProgress] = useState(0);
   const [dbSyncStatusText, setDbSyncStatusText] = useState('');
 
-  // Start SQLite synchronization in the background on startup
+  // Start SQLite botanical catalog synchronization in the background on startup
   useEffect(() => {
     const runBackgroundSync = async () => {
       try {
@@ -85,100 +92,127 @@ export default function RootLayout() {
     runBackgroundSync();
   }, []);
 
-  useEffect(() => {
-    // Load stored values on startup
-    const loadStoredData = async () => {
-      try {
-        const storedName = await AsyncStorage.getItem('@user_name');
-        if (storedName) {
-          setUserName(storedName);
-        }
-        const storedScansCount = await AsyncStorage.getItem('@total_scans_count');
-        if (storedScansCount) {
-          setScansCount(parseInt(storedScansCount, 10) || 0);
-        }
-        const storedAvatar = await AsyncStorage.getItem('@user_avatar');
-        if (storedAvatar) {
-          setUserAvatar(storedAvatar);
-        }
-        const storedEmail = await AsyncStorage.getItem('@user_email');
-        if (storedEmail) {
-          setUserEmail(storedEmail);
-        }
-        const storedPlants = await AsyncStorage.getItem('@saved_plants');
-        let parsedPlants = [];
-        if (storedPlants) {
-          const parsed = JSON.parse(storedPlants);
-          if (Array.isArray(parsed)) {
-            parsedPlants = parsed.map((p: any) => ({
-              ...p,
-              imageUri: resolveLocalUri(p.imageUri) || p.imageUri,
-            }));
-          }
-        }
-        const storedScans = await AsyncStorage.getItem('@recent_scans');
-        if (storedScans) {
-          const parsed = JSON.parse(storedScans);
-          if (Array.isArray(parsed)) {
-            const fixed = parsed.map((s: any) => ({
-              ...s,
-              imageUri: resolveLocalUri(s.imageUri) || s.imageUri,
-            }));
-            setRecentScans(fixed);
-          } else {
-            setRecentScans(parsed);
-          }
-        }
-
-        const storedReminders = await AsyncStorage.getItem('@reminders');
-        let parsedReminders = [];
-        if (storedReminders) {
-          const parsed = JSON.parse(storedReminders);
-          if (Array.isArray(parsed)) {
-            parsedReminders = parsed;
-          }
-        }
-
-        // Clean out legacy hardcoded test plant if present
-        const cleanPlants = parsedPlants.filter((p: any) => p.id !== 'test-snake-plant');
-        const cleanReminders = parsedReminders.filter((r: any) => r.plantName !== 'Bedroom Snake Plant');
-
-        setSavedPlants(cleanPlants);
-        setReminders(cleanReminders);
-      } catch (err) {
-        console.error('Failed to load AsyncStorage data:', err);
+  /**
+   * Refreshes all user data dynamically from the PostgreSQL database.
+   * Completely bypasses and purges client-side AsyncStorage caching.
+   */
+  const refreshUserData = useCallback(async () => {
+    setIsLoadingUserData(true);
+    try {
+      const isAuthed = await api.isAuthenticated();
+      if (!isAuthed) {
+        setUserName('User');
+        setUserEmail('');
+        setUserAvatar(null);
+        setSavedPlants([]);
+        setRecentScans([]);
+        setReminders([]);
+        setScansCount(0);
+        return;
       }
-    };
-    loadStoredData();
+
+      // 1. Fetch authenticated user profile from Backend DB
+      try {
+        const user = await api.getMe();
+        if (user) {
+          setUserName(user.name || user.email.split('@')[0]);
+          setUserEmail(user.email);
+        }
+      } catch (err) {
+        console.warn('Could not fetch user profile from DB:', err);
+      }
+
+      // 2. Fetch authenticated user's plants directly from Backend DB
+      try {
+        const dbPlants: PlantData[] = await api.getPlants();
+        if (Array.isArray(dbPlants)) {
+          const mapped = dbPlants.map((p) => ({
+            id: p.id,
+            name: p.name,
+            botanicalName: p.scientific_name || p.name,
+            imageUri: p.image_url || resolveLocalUri(p.image_url) || 'https://images.unsplash.com/photo-1596547609652-9cf5d8d76921?q=80&w=300&auto=format&fit=crop',
+            confidence: p.identification_confidence ? Math.round(p.identification_confidence * 100) : 95,
+            nextWatering: 'In 3 days',
+            lastScannedDate: new Date(p.created_at).getTime(),
+            created_at: p.created_at,
+          }));
+
+          setSavedPlants(mapped);
+          setScansCount(mapped.length);
+          setRecentScans(mapped.slice(0, 8));
+
+          // Auto-generate active reminders for the user's saved plants
+          const plantReminders = mapped.map((plant) => ({
+            plantName: plant.name,
+            wateringFreq: 'daily',
+            wateringTime: 'morning',
+            fertilizerFreq: 'none',
+            enableNotifications: true,
+            lastWatered: Date.now() - 24 * 60 * 60 * 1000,
+            snoozedUntil: undefined,
+          }));
+          setReminders(plantReminders);
+        } else {
+          setSavedPlants([]);
+          setRecentScans([]);
+          setReminders([]);
+          setScansCount(0);
+        }
+      } catch (err) {
+        console.warn('Could not fetch user plants from DB:', err);
+        setSavedPlants([]);
+        setRecentScans([]);
+        setReminders([]);
+        setScansCount(0);
+      }
+    } catch (err) {
+      console.error('Failed to refresh user data from DB:', err);
+    } finally {
+      setIsLoadingUserData(false);
+    }
   }, []);
 
-  const updateUserName = async (name: string) => {
-    try {
-      setUserName(name);
-      await AsyncStorage.setItem('@user_name', name);
-    } catch (err) {
-      console.error(err);
-    }
+  // On App Launch: Purge old AsyncStorage plant/scan cache and load from DB
+  useEffect(() => {
+    const initializeAppData = async () => {
+      try {
+        // Clean out legacy persisted AsyncStorage keys to prevent stale data leakage
+        await AsyncStorage.multiRemove([
+          '@saved_plants',
+          '@recent_scans',
+          '@reminders',
+          '@total_scans_count',
+          '@user_name',
+          '@user_email',
+          '@user_avatar',
+          '@cached_plants',
+        ]);
+      } catch (err) {
+        console.warn('AsyncStorage legacy cache cleanup warning:', err);
+      }
+
+      // Fetch clean user data from database
+      await refreshUserData();
+    };
+
+    initializeAppData();
+  }, [refreshUserData]);
+
+  const updateUserName = (name: string) => {
+    setUserName(name);
   };
 
-  const updateUserAvatar = async (avatar: string) => {
-    try {
-      setUserAvatar(avatar);
-      await AsyncStorage.setItem('@user_avatar', avatar);
-    } catch (err) {
-      console.error(err);
-    }
+  const updateUserAvatar = (avatar: string) => {
+    setUserAvatar(avatar);
   };
 
-  const updateUserEmail = async (email: string) => {
-    try {
-      setUserEmail(email);
-      await AsyncStorage.setItem('@user_email', email);
-    } catch (err) {
-      console.error(err);
-    }
+  const updateUserEmail = (email: string) => {
+    setUserEmail(email);
   };
 
+  /**
+   * Saves a plant to the Backend DB and updates local in-memory state.
+   */
   const savePlant = async (plant: any) => {
     try {
       const fixedPlant = {
@@ -186,167 +220,157 @@ export default function RootLayout() {
         imageUri: resolveLocalUri(plant.imageUri) || plant.imageUri,
         lastScannedDate: plant.lastScannedDate || Date.now(),
       };
+
+      // Optimistic in-memory update
       setSavedPlants((prev) => {
         const alreadyExists = prev.some((p) => p.name === fixedPlant.name);
-        let updated;
         if (alreadyExists) {
-          updated = prev.map((p) => p.name === fixedPlant.name ? { ...p, ...fixedPlant } : p);
-        } else {
-          updated = [...prev, fixedPlant];
+          return prev.map((p) => p.name === fixedPlant.name ? { ...p, ...fixedPlant } : p);
         }
-        AsyncStorage.setItem('@saved_plants', JSON.stringify(updated)).catch(console.error);
-        
-        // Auto-create matching care reminder
-        setReminders((prevRem) => {
-          if (prevRem.some((r) => r.plantName === fixedPlant.name)) return prevRem;
-          const autoReminder = {
-            plantName: fixedPlant.name,
-            wateringFreq: 'daily',
-            wateringTime: 'morning',
-            fertilizerFreq: 'none',
-            enableNotifications: true,
-            lastWatered: Date.now() - 24 * 60 * 60 * 1000, // Seed as watered yesterday (due today) for testing
-            snoozedUntil: undefined,
-          };
-          const updatedRem = [...prevRem, autoReminder];
-          AsyncStorage.setItem('@reminders', JSON.stringify(updatedRem)).catch(console.error);
-          return updatedRem;
-        });
-
-        return updated;
+        return [...prev, fixedPlant];
       });
+
+      // Create reminder in memory
+      setReminders((prevRem) => {
+        if (prevRem.some((r) => r.plantName === fixedPlant.name)) return prevRem;
+        return [...prevRem, {
+          plantName: fixedPlant.name,
+          wateringFreq: 'daily',
+          wateringTime: 'morning',
+          fertilizerFreq: 'none',
+          enableNotifications: true,
+          lastWatered: Date.now() - 24 * 60 * 60 * 1000,
+          snoozedUntil: undefined,
+        }];
+      });
+
+      // Persist to Backend Database
+      const isAuthed = await api.isAuthenticated();
+      if (isAuthed) {
+        try {
+          const confidenceDecimal = fixedPlant.confidence ? (fixedPlant.confidence > 1 ? fixedPlant.confidence / 100 : fixedPlant.confidence) : 0.95;
+          const created = await api.createPlant({
+            name: fixedPlant.name,
+            scientific_name: fixedPlant.botanicalName || fixedPlant.name,
+            identification_confidence: confidenceDecimal,
+            image_url: typeof fixedPlant.imageUri === 'string' ? fixedPlant.imageUri : undefined,
+          });
+
+          if (created && created.id) {
+            // Update the local plant ID with the real backend DB UUID
+            setSavedPlants((prev) =>
+              prev.map((p) => (p.name === fixedPlant.name ? { ...p, id: created.id } : p))
+            );
+          }
+        } catch (dbErr) {
+          console.warn('Backend DB plant save error:', dbErr);
+        }
+      }
     } catch (err) {
-      console.error(err);
+      console.error('Failed to save plant:', err);
     }
   };
 
+  /**
+   * Removes a plant from the Backend DB and updates local in-memory state.
+   */
   const removePlant = async (id: string) => {
     try {
-      setSavedPlants((prev) => {
-        const updated = prev.filter((p) => p.id !== id);
-        AsyncStorage.setItem('@saved_plants', JSON.stringify(updated)).catch(console.error);
-        return updated;
-      });
+      // Optimistic in-memory update
+      setSavedPlants((prev) => prev.filter((p) => p.id !== id));
+
+      // Remove from backend DB if it has a valid DB UUID
+      if (isUUID(id)) {
+        const isAuthed = await api.isAuthenticated();
+        if (isAuthed) {
+          try {
+            await api.deletePlant(id);
+          } catch (dbErr) {
+            console.warn('Backend DB plant delete error:', dbErr);
+          }
+        }
+      }
     } catch (err) {
-      console.error(err);
+      console.error('Failed to remove plant:', err);
     }
   };
 
-  const addRecentScan = async (scan: any) => {
-    try {
-      const fixedScan = {
-        ...scan,
-        imageUri: resolveLocalUri(scan.imageUri) || scan.imageUri,
-      };
-      setRecentScans((prev) => {
-        const filtered = prev.filter((s) => s.name !== fixedScan.name);
-        const updated = [fixedScan, ...filtered].slice(0, 8);
-        AsyncStorage.setItem('@recent_scans', JSON.stringify(updated)).catch(console.error);
-        return updated;
-      });
-      setScansCount((prev) => {
-        const newVal = prev + 1;
-        AsyncStorage.setItem('@total_scans_count', String(newVal)).catch(console.error);
-        return newVal;
-      });
-    } catch (err) {
-      console.error(err);
-    }
+  const addRecentScan = (scan: any) => {
+    const fixedScan = {
+      ...scan,
+      imageUri: resolveLocalUri(scan.imageUri) || scan.imageUri,
+    };
+    setRecentScans((prev) => {
+      const filtered = prev.filter((s) => s.name !== fixedScan.name);
+      return [fixedScan, ...filtered].slice(0, 8);
+    });
+    setScansCount((prev) => prev + 1);
   };
 
-  const removeRecentScan = async (id: string) => {
-    try {
-      setRecentScans((prev) => {
-        const updated = prev.filter((s) => s.id !== id);
-        AsyncStorage.setItem('@recent_scans', JSON.stringify(updated)).catch(console.error);
-        return updated;
-      });
-    } catch (err) {
-      console.error(err);
-    }
+  const removeRecentScan = (id: string) => {
+    setRecentScans((prev) => prev.filter((s) => s.id !== id));
   };
 
-  const saveReminder = async (reminder: any) => {
-    try {
-      setReminders((prev) => {
-        const filtered = prev.filter((r) => r.plantName !== reminder.plantName);
-        const updated = [...filtered, reminder];
-        AsyncStorage.setItem('@reminders', JSON.stringify(updated)).catch(console.error);
-        return updated;
-      });
-    } catch (err) {
-      console.error(err);
-    }
+  const saveReminder = (reminder: any) => {
+    setReminders((prev) => {
+      const filtered = prev.filter((r) => r.plantName !== reminder.plantName);
+      return [...filtered, reminder];
+    });
   };
 
-  const addHealthScan = async (
-    plantName: string, 
-    score: number, 
+  const addHealthScan = (
+    plantName: string,
+    score: number,
     imageUri?: string,
     categoryRatings?: { water: number; sunlight: number; humidity: number; growth: number; overall: number }
   ) => {
-    try {
-      setSavedPlants((prev) => {
-        const updated = prev.map((p) => {
-          if (p.name === plantName || p.botanicalName === plantName) {
-            const history = Array.isArray(p.healthHistory) ? p.healthHistory : [];
-            return {
-              ...p,
-              confidence: score,
-              lastScannedDate: Date.now(),
-              imageUri: imageUri || p.imageUri,
-              healthHistory: [...history, { date: Date.now(), score: Math.round(score) }],
-              categoryRatings: categoryRatings || p.categoryRatings,
-            };
-          }
-          return p;
-        });
-        AsyncStorage.setItem('@saved_plants', JSON.stringify(updated)).catch(console.error);
-        return updated;
-      });
-    } catch (err) {
-      console.error('Failed to add health scan:', err);
-    }
+    setSavedPlants((prev) =>
+      prev.map((p) => {
+        if (p.name === plantName || p.botanicalName === plantName) {
+          const history = Array.isArray(p.healthHistory) ? p.healthHistory : [];
+          return {
+            ...p,
+            confidence: score,
+            lastScannedDate: Date.now(),
+            imageUri: imageUri || p.imageUri,
+            healthHistory: [...history, { date: Date.now(), score: Math.round(score) }],
+            categoryRatings: categoryRatings || p.categoryRatings,
+          };
+        }
+        return p;
+      })
+    );
   };
 
-  const updateCategoryRatings = async (
+  const updateCategoryRatings = (
     plantName: string,
     ratings: { water?: number; sunlight?: number; humidity?: number; growth?: number; overall?: number }
   ) => {
-    try {
-      setSavedPlants((prev) => {
-        const updated = prev.map((p) => {
-          if (p.name === plantName || p.botanicalName === plantName) {
-            const currentRatings = p.categoryRatings || { water: 4, sunlight: 4, humidity: 3, growth: 3, overall: 4 };
-            const newRatings = { ...currentRatings, ...ratings };
-            return {
-              ...p,
-              categoryRatings: newRatings,
-            };
-          }
-          return p;
-        });
-        AsyncStorage.setItem('@saved_plants', JSON.stringify(updated)).catch(console.error);
-        return updated;
-      });
-    } catch (err) {
-      console.error('Failed to update category ratings:', err);
-    }
+    setSavedPlants((prev) =>
+      prev.map((p) => {
+        if (p.name === plantName || p.botanicalName === plantName) {
+          const currentRatings = p.categoryRatings || { water: 4, sunlight: 4, humidity: 3, growth: 3, overall: 4 };
+          return {
+            ...p,
+            categoryRatings: { ...currentRatings, ...ratings },
+          };
+        }
+        return p;
+      })
+    );
   };
 
   const logout = async () => {
     try {
       await api.logout();
-      await AsyncStorage.multiRemove([
-        '@plantify_auth_token',
-        '@plantify_auth_user',
-        '@user_name',
-        '@user_email',
-        '@user_avatar',
-      ]);
+      // Reset all user data in state
       setUserName('User');
       setUserEmail('');
       setUserAvatar(null);
+      setSavedPlants([]);
+      setRecentScans([]);
+      setReminders([]);
+      setScansCount(0);
     } catch (err) {
       console.error('Failed to log out:', err);
     }
@@ -378,29 +402,31 @@ export default function RootLayout() {
   }
 
   return (
-    <UserContext.Provider value={{ 
-      userName, 
-      setUserName: updateUserName, 
+    <UserContext.Provider value={{
+      userName,
+      setUserName: updateUserName,
       scansCount,
       setScansCount,
       userAvatar,
       setUserAvatar: updateUserAvatar,
       userEmail,
       setUserEmail: updateUserEmail,
-      savedPlants, 
-      savePlant, 
-      removePlant, 
-      recentScans, 
+      savedPlants,
+      savePlant,
+      removePlant,
+      recentScans,
       addRecentScan,
       removeRecentScan,
-      reminders, 
+      reminders,
       saveReminder,
       addHealthScan,
       updateCategoryRatings,
       logout,
+      refreshUserData,
+      isLoadingUserData,
       isDbSyncing,
       dbSyncProgress,
-      dbSyncStatusText
+      dbSyncStatusText,
     }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack screenOptions={{ headerShown: false }}>
@@ -422,3 +448,4 @@ export default function RootLayout() {
     </UserContext.Provider>
   );
 }
+
