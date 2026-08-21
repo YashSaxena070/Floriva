@@ -6,6 +6,8 @@ import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 
+import { useUser } from './_layout';
+
 const { width } = Dimensions.get('window');
 
 const TIPS = [
@@ -17,12 +19,21 @@ const TIPS = [
 
 export default function UploadPhotoScreen() {
   const router = useRouter();
+  const { isLoggedIn } = useUser();
   const { isRescan, targetPlantName } = useLocalSearchParams<{
     isRescan?: string;
     targetPlantName?: string;
   }>();
 
   const handleSelectPhoto = async () => {
+    if (!isLoggedIn) {
+      router.push({
+        pathname: '/login' as any,
+        params: { action: 'upload' },
+      });
+      return;
+    }
+
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       
@@ -58,6 +69,14 @@ export default function UploadPhotoScreen() {
   };
 
   const handleCameraPress = () => {
+    if (!isLoggedIn) {
+      router.push({
+        pathname: '/login' as any,
+        params: { action: 'scan' },
+      });
+      return;
+    }
+
     router.push({
       pathname: '/camera',
       params: {

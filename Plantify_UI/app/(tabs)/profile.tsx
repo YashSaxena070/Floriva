@@ -18,11 +18,18 @@ const MENU_ITEMS = [
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { userName, setUserName, userAvatar, setUserAvatar, userEmail, setUserEmail, scansCount, logout } = useUser();
+  const { isLoggedIn, userName, setUserName, userAvatar, setUserAvatar, userEmail, setUserEmail, scansCount, logout } = useUser();
   const [isEditing, setIsEditing] = useState(false);
   const [tempName, setTempName] = useState(userName);
   const [tempEmail, setTempEmail] = useState(userEmail);
   const [isSupportExpanded, setIsSupportExpanded] = useState(false);
+
+  const menuItems = [
+    { id: '1', emoji: '⚙️', label: 'Account Settings' },
+    { id: '2', emoji: '🔔', label: 'Reminders & Notifications' },
+    { id: '5', emoji: '💬', label: 'Help & Support' },
+    ...(isLoggedIn ? [{ id: '6', emoji: '🚪', label: 'Log Out' }] : []),
+  ];
 
   // Dynamic Scans-Based Level progression (1 level per 5 scans)
   const xpGoal = 5;
@@ -31,6 +38,10 @@ export default function ProfileScreen() {
   const xpProgressPercent = `${Math.min((currentXp / xpGoal) * 100, 100)}%`;
 
   const handleStartEditing = () => {
+    if (!isLoggedIn) {
+      router.push('/login' as any);
+      return;
+    }
     setTempName(userName);
     setTempEmail(userEmail);
     setIsEditing(true);
@@ -49,18 +60,26 @@ export default function ProfileScreen() {
   const handleMenuPress = (itemId: string) => {
     switch (itemId) {
       case '1': // Account Settings
-        setIsEditing(true);
+        if (!isLoggedIn) {
+          router.push('/login' as any);
+        } else {
+          setIsEditing(true);
+        }
         break;
       case '2': // Reminders & Notifications
-        router.push({
-          pathname: '/care-reminder',
-          params: { plantName: 'General' }
-        });
+        if (!isLoggedIn) {
+          router.push('/login' as any);
+        } else {
+          router.push({
+            pathname: '/care-reminder',
+            params: { plantName: 'General' }
+          });
+        }
         break;
       case '3': // Privacy & Security
         Alert.alert(
           'Privacy & Security',
-          'Your plant scan data, photos, and schedules are saved entirely offline on your device. We do not track, collect, or transmit your location or personal data.'
+          'Your plant scan data, photos, and schedules are saved securely. We do not track, collect, or transmit your location or personal data.'
         );
         break;
       case '4': // Saved Articles & Tips
@@ -73,21 +92,23 @@ export default function ProfileScreen() {
         setIsSupportExpanded(!isSupportExpanded);
         break;
       case '6': // Log Out
-        Alert.alert(
-          'Log Out',
-          'Are you sure you want to log out of Plantify?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Log Out',
-              style: 'destructive',
-              onPress: async () => {
-                await logout();
-                router.replace('/login' as any);
+        if (isLoggedIn) {
+          Alert.alert(
+            'Log Out',
+            'Are you sure you want to log out of Plantify?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Log Out',
+                style: 'destructive',
+                onPress: async () => {
+                  await logout();
+                  router.replace('/login' as any);
+                },
               },
-            },
-          ]
-        );
+            ]
+          );
+        }
         break;
       default:
         break;
@@ -95,6 +116,10 @@ export default function ProfileScreen() {
   };
 
   const handlePickAvatar = async () => {
+    if (!isLoggedIn) {
+      router.push('/login' as any);
+      return;
+    }
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
@@ -131,9 +156,11 @@ export default function ProfileScreen() {
               source={{ uri: userAvatar || DEFAULT_AVATAR }}
               style={styles.avatar}
             />
-            <View style={styles.avatarEditBadge}>
-              <Text style={{ fontSize: 10 }}>📸</Text>
-            </View>
+            {isLoggedIn && (
+              <View style={styles.avatarEditBadge}>
+                <Text style={{ fontSize: 10 }}>📸</Text>
+              </View>
+            )}
           </TouchableOpacity>
           {isEditing ? (
             <View style={styles.editNameRow}>
@@ -156,9 +183,26 @@ export default function ProfileScreen() {
             </View>
           ) : (
             <View style={styles.nameRow}>
-              <Text style={styles.userName}>{userName}</Text>
-              <TouchableOpacity style={styles.editNameBtn} onPress={handleStartEditing}>
-                <Text style={styles.editNameIcon}>✍️</Text>
+              <Text style={styles.userName}>{isLoggedIn ? userName : 'Guest User'}</Text>
+              {isLoggedIn ? (
+                <TouchableOpacity style={styles.editNameBtn} onPress={handleStartEditing}>
+                  <Text style={styles.editNameIcon}>✍️</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
+
+          {isLoggedIn ? (
+            <Text style={styles.userEmail}>{userEmail}</Text>
+          ) : (
+            <View style={styles.guestActionContainer}>
+              <Text style={styles.guestSubtitle}>Sign in to save and sync your plants</Text>
+              <TouchableOpacity
+                style={styles.guestLoginBtn}
+                activeOpacity={0.85}
+                onPress={() => router.push('/login' as any)}
+              >
+                <Text style={styles.guestLoginBtnText}>Log In / Sign Up</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -176,14 +220,15 @@ export default function ProfileScreen() {
 
         {/* Menu Items */}
         <View style={styles.menuContainer}>
-          {MENU_ITEMS.map((item) => {
+          {menuItems.map((item, idx) => {
             const isSupport = item.id === '5';
             const showDropdown = isSupport && isSupportExpanded;
+            const isLast = idx === menuItems.length - 1;
             
             return (
               <View key={item.id}>
                 <TouchableOpacity 
-                  style={styles.menuItem} 
+                  style={[styles.menuItem, isLast && { borderBottomWidth: 0 }]} 
                   onPress={() => handleMenuPress(item.id)}
                   activeOpacity={0.8}
                 >
@@ -498,4 +543,33 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#4E8C44',
   },
+  guestActionContainer: {
+    alignItems: 'center',
+    marginTop: 6,
+    width: '100%',
+  },
+  guestSubtitle: {
+    fontSize: 12,
+    color: '#718E7B',
+    fontWeight: '500',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  guestLoginBtn: {
+    backgroundColor: '#4E8C44',
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    shadowColor: '#4E8C44',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  guestLoginBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
 });
+

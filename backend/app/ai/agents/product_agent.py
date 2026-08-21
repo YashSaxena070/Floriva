@@ -46,93 +46,18 @@ logger = logging.getLogger(__name__)
 
 # ── System Prompt ───────────────────────────────────────────────
 
-PRODUCT_AGENT_SYSTEM_PROMPT = """\
-You are the Plantify Product Recommendation Agent. Your job is to find and \
-recommend REAL products from the Plantify database for treating plant health issues.
-
-## CRITICAL RULES — YOU MUST FOLLOW THESE
-
-1. **Database = Product Truth.** You are NOT the source of product data. \
-   You MUST use the provided tools to search for products. \
-   NEVER invent product names, IDs, prices, stock levels, or URLs.
-
-2. **Your Role = Reasoning & Ranking.** You decide WHAT to search for, \
-   WHICH products are most relevant, and WHY. But the actual product data \
-   always comes from tool calls.
-
-3. **No Hallucinated Products.** If no products are found in the database, \
-   report that honestly. Do NOT make up products.
-
-## YOUR WORKFLOW
-
-Follow these steps in order:
-
-1. **Search Products**: Use `search_products` with the appropriate category \
-   to find candidate products. Use the category slug that matches the \
-   treatment need.
-
-2. **Find Compatible Products**: Use `get_compatible_products` to find \
-   products specifically designed for the plant's problem category and species.
-
-3. **Check Stock**: For the top candidates, use `check_product_stock` to \
-   verify they are actually available.
-
-4. **Get Details**: Use `get_product` to get full details (usage instructions, \
-   compatibility data) for your top picks.
-
-5. **Rank & Select**: Based on the tool results, select:
-   - **best_recommendation**: The product with the highest relevance \
-     (best compatibility match, good stock, reasonable price)
-   - **budget_alternative**: A more affordable option (if available)
-   - **premium_alternative**: A premium/comprehensive option (if available)
-
-## CATEGORY SLUG MAPPING
-
-Map treatment needs to these database category slugs:
-- Fungal/bacterial disease → "fungicide"
-- Pest/insect problems → "pest_control"
-- Nutrient deficiency → "fertilizer"
-- Soil problems → "soil_amendment" or "soil"
-- General plant care → "plant_care"
-- Tools needed → "gardening_tools"
-
-## OUTPUT FORMAT
-
-After completing your search and evaluation, provide your final answer as a \
-JSON object with this EXACT structure:
-
-```json
+PRODUCT_AGENT_SYSTEM_PROMPT = """Plantify Product Recommendation Agent.
+1. Use tools (search_products, get_compatible_products, check_product_stock, get_product) to query real products from the DB.
+2. Select up to 3 real products: best_recommendation, budget_alternative, premium_alternative.
+3. Respond ONLY with valid JSON:
 {
-    "best_recommendation": {
-        "product_id": "<UUID from database>",
-        "name": "<exact name from database>",
-        "reason": "<your explanation of why this is the best match>",
-        "price": <price from database>,
-        "availability": "<in_stock|low_stock|out_of_stock>",
-        "recommendation_score": <0.0-1.0 relevance score>,
-        "usage_instructions": "<from database or null>"
-    },
-    "budget_alternative": { <same structure or null> },
-    "premium_alternative": { <same structure or null> },
-    "status": "product_recommendation_complete",
-    "reasoning": "<overall explanation of your selection process>"
+  "best_recommendation": {"product_id":"<UUID>","name":"<name>","reason":"<why>","price":12.99,"availability":"in_stock","recommendation_score":0.95,"usage_instructions":"..."},
+  "budget_alternative": null or {...},
+  "premium_alternative": null or {...},
+  "status": "product_recommendation_complete" | "no_product_available",
+  "reasoning": "summary"
 }
-```
-
-If NO products are found:
-```json
-{
-    "best_recommendation": null,
-    "budget_alternative": null,
-    "premium_alternative": null,
-    "status": "no_product_available",
-    "reasoning": "<explanation of what was searched and why nothing was found>"
-}
-```
-
-IMPORTANT: The product_id, name, price, and availability MUST come from \
-tool results. Do NOT make up any of these values.
-"""
+Never invent product IDs or names. All product data MUST come from tool results."""
 
 
 # ── Agent Class ─────────────────────────────────────────────────
@@ -155,7 +80,7 @@ class ProductRecommendationAgent:
     def __init__(
         self,
         db: Session,
-        model_name: str = "llama-3.3-70b-versatile",
+        model_name: str = "openai/gpt-oss-20b",
         temperature: float = 0.1,
         max_iterations: int = 8,
     ):
@@ -445,28 +370,5 @@ class ProductRecommendationAgent:
         severity: str,
         treatment_reason: str,
     ) -> str:
-        """Build the user prompt with treatment context."""
-        return f"""\
-Find and recommend products for the following plant treatment need:
-
-## Treatment Context
-
-- **Required Product Category**: {required_product_category}
-- **Plant Species**: {plant_species or "Unknown"}
-- **Problem Category**: {problem_category or "Unknown"}
-- **Severity**: {severity}
-- **Treatment Reason**: {treatment_reason or "Treatment required based on health analysis."}
-
-## Instructions
-
-1. First, use `search_products` with the category slug that best matches \
-"{required_product_category}".
-2. Then use `get_compatible_products` with problem_category="{problem_category}" \
-and plant_species="{plant_species}" to find specifically compatible products.
-3. For the top candidates, use `check_product_stock` to verify availability.
-4. Use `get_product` to get full details for your final selections.
-5. Select up to 3 products: best_recommendation, budget_alternative, premium_alternative.
-6. Return your final JSON recommendation.
-
-Remember: Use ONLY real product data from the tools. Never invent products.
-"""
+        """Build a compact user prompt with treatment context."""
+        return f"Find real products for: Species: {plant_species or 'Plant'} | Problem: {problem_category or 'Issue'} | Severity: {severity} | Need: {required_product_category} | Reason: {treatment_reason or 'Treatment required'}. Use tools to query DB and return JSON."

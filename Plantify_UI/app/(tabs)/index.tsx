@@ -1,13 +1,14 @@
 import WeatherCareCard from '@/components/WeatherCareCard';
 import { getWateringCountdown } from '@/services/plantHealthService';
 import { plantService } from '@/services/plantService';
+import { getCurrentUserLocation } from '@/services/weatherService';
 import { SQLitePlant as Plant } from '@/types/plant';
 import { Camera } from 'expo-camera';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { ActivityIndicator, Animated, Dimensions, FlatList, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -49,9 +50,44 @@ const CATEGORIES = [
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { userName, recentScans, removeRecentScan, reminders, isDbSyncing, dbSyncProgress, dbSyncStatusText, savedPlants } = useUser();
+  const { isLoggedIn, userName, recentScans, removeRecentScan, reminders, isDbSyncing, dbSyncProgress, dbSyncStatusText, savedPlants } = useUser();
   const [isNotiVisible, setIsNotiVisible] = useState(false);
   const slideAnim = useRef(new Animated.Value(width * 0.75)).current;
+  const [currentCity, setCurrentCity] = useState<string | null>(null);
+
+  // Fetch real location ONLY if logged in and permission is granted
+  useEffect(() => {
+    let isMounted = true;
+    const checkUserLocation = async () => {
+      if (!isLoggedIn) {
+        if (isMounted) setCurrentCity(null);
+        return;
+      }
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await getCurrentUserLocation();
+          if (isMounted && loc) {
+            if (loc.city && loc.city !== 'Current Location') {
+              setCurrentCity(loc.city);
+            } else if (loc.region) {
+              setCurrentCity(loc.region);
+            } else {
+              setCurrentCity('Local Area');
+            }
+          }
+        } else {
+          if (isMounted) setCurrentCity(null);
+        }
+      } catch {
+        if (isMounted) setCurrentCity(null);
+      }
+    };
+    checkUserLocation();
+    return () => {
+      isMounted = false;
+    };
+  }, [isLoggedIn]);
 
   // Category Explorer states
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -255,6 +291,10 @@ Use bullet points whenever useful.`;
   const allNotifications = [...dynamicNotifications, ...scanNotifications];
 
   const openNotifications = () => {
+    if (!isLoggedIn) {
+      router.push('/login' as any);
+      return;
+    }
     setIsNotiVisible(true);
     Animated.timing(slideAnim, {
       toValue: 0,
@@ -274,6 +314,13 @@ Use bullet points whenever useful.`;
   };
 
   const handleScanCardPress = async () => {
+    if (!isLoggedIn) {
+      router.push({
+        pathname: '/login' as any,
+        params: { action: 'scan' },
+      });
+      return;
+    }
     try {
       const { status } = await Camera.getCameraPermissionsAsync();
       if (status === 'granted') {
@@ -293,10 +340,24 @@ Use bullet points whenever useful.`;
   };
 
   const handleUploadCardPress = () => {
+    if (!isLoggedIn) {
+      router.push({
+        pathname: '/login' as any,
+        params: { action: 'upload' },
+      });
+      return;
+    }
     router.push('/upload-photo');
   };
 
   const handleNearbyPlantsPress = async () => {
+    if (!isLoggedIn) {
+      router.push({
+        pathname: '/login' as any,
+        params: { action: 'nearby' },
+      });
+      return;
+    }
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
       if (status === 'granted') {
@@ -480,6 +541,21 @@ Use bullet points whenever useful.`;
           />
           <Text style={styles.brandText}>Plantify</Text>
         </View>
+
+        {/* Real Location Pill: ONLY shown when logged in AND user granted location access */}
+        {isLoggedIn && currentCity ? (
+          <TouchableOpacity
+            style={styles.locationHeaderPill}
+            activeOpacity={0.8}
+            onPress={() => router.push('/nearby-plants')}
+          >
+            <Ionicons name="location-sharp" size={13} color="#2D6A4F" />
+            <Text style={styles.locationHeaderText} numberOfLines={1}>
+              {currentCity}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+
         <TouchableOpacity
           style={styles.notificationBtn}
           activeOpacity={0.7}
@@ -511,7 +587,7 @@ Use bullet points whenever useful.`;
               <View style={[styles.welcomeSearchLeft, { paddingRight: 0 }]}>
                 {/* Welcome Text */}
                 <View style={styles.rowWelcomeContainer}>
-                  <Text style={styles.userGreeting}>Hello {userName} 👋</Text>
+                  <Text style={styles.userGreeting}>{isLoggedIn ? `Hello ${userName} 👋` : 'Welcome 👋'}</Text>
                   <Text style={styles.headline}>What plant shall{'\n'}we discover today?</Text>
                 </View>
 
@@ -620,7 +696,7 @@ Use bullet points whenever useful.`;
             <View style={styles.welcomeSearchLeft}>
               {/* Welcome Text */}
               <View style={styles.rowWelcomeContainer}>
-                <Text style={styles.userGreeting}>Hello {userName} 👋</Text>
+                <Text style={styles.userGreeting}>{isLoggedIn ? `Hello ${userName} 👋` : 'Welcome 👋'}</Text>
                 <Text style={styles.headline}>What plant shall{'\n'}we discover today?</Text>
               </View>
 
@@ -1038,6 +1114,28 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#EAF6EC',
     borderBottomWidth: 0,
+  },
+  locationHeaderPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    gap: 4,
+    maxWidth: '45%',
+    borderWidth: 1,
+    borderColor: '#D4E6D2',
+    shadowColor: '#1C3A27',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  locationHeaderText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2D6A4F',
   },
   brandRow: {
     flexDirection: 'row',

@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
+import { useRouter } from 'expo-router';
 import { useUser } from '../_layout';
 
 const FREQ_LABELS: Record<string, string> = {
@@ -20,7 +21,8 @@ const TIME_LABELS: Record<string, string> = {
 };
 
 export default function CareScreen() {
-  const { reminders } = useUser();
+  const router = useRouter();
+  const { isLoggedIn, reminders } = useUser();
   const [completedIds, setCompletedIds] = useState<string[]>([]);
 
   const toggleCompleted = (id: string) => {
@@ -47,10 +49,23 @@ export default function CareScreen() {
         {reminders.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyEmoji}>📅</Text>
-            <Text style={styles.emptyTitle}>No reminders yet</Text>
-            <Text style={styles.emptyDescription}>
-              Scan a plant, save it, and tap "Set Care Reminder" on the results page to add your first schedule.
+            <Text style={styles.emptyTitle}>
+              {!isLoggedIn ? "Sign In to View Care Reminders" : "No reminders yet"}
             </Text>
+            <Text style={styles.emptyDescription}>
+              {!isLoggedIn
+                ? "Log in to track hydration, set watering alerts, and manage plant schedules."
+                : "Scan a plant, save it, and tap \"Set Care Reminder\" on the results page to add your first schedule."}
+            </Text>
+            {!isLoggedIn && (
+              <TouchableOpacity
+                style={styles.careLoginBtn}
+                activeOpacity={0.85}
+                onPress={() => router.push('/login' as any)}
+              >
+                <Text style={styles.careLoginBtnText}>Log In / Sign Up</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           reminders.map((rem, idx) => {
@@ -338,5 +353,22 @@ const styles = StyleSheet.create({
     color: '#718E7B',
     textAlign: 'center',
     lineHeight: 18,
+  },
+  careLoginBtn: {
+    marginTop: 16,
+    backgroundColor: '#4E8C44',
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    borderRadius: 14,
+    shadowColor: '#4E8C44',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  careLoginBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

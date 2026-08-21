@@ -82,11 +82,8 @@ export default function RegisterScreen() {
       // New user registered -> ask for location permission next
       navigateToLocationPermission();
     } catch (err: any) {
-      console.warn('Backend registration failed, using local session fallback:', err);
-      setUserName(fullName);
-      setUserEmail(cleanEmail);
-      await refreshUserData();
-      navigateToLocationPermission();
+      console.warn('Backend registration failed:', err);
+      setErrorMessage(err?.message || 'Registration failed. Please try again.');
     } finally {
       setIsLoading(false);
     }

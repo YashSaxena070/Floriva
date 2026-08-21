@@ -262,27 +262,27 @@ export default function AIAnalysisScreen() {
       setStep1('done');
       setStep2('active');
       setPct(45);
-    }, 1000);
+    }, 600);
 
     // Phase 2: Matching species
     const t2 = setTimeout(() => {
       setStep2('done');
       setStep3('active');
       setPct(78);
-    }, 2200);
+    }, 1300);
 
     // Phase 3: Checking shape
     const t3 = setTimeout(() => {
       setStep3('done');
       setStep4('active');
       setPct(92);
-    }, 3400);
+    }, 1900);
 
     // Phase 4: Done & Navigate
     const t4 = setTimeout(() => {
       setStep4('done');
       setPct(100);
-    }, 4400);
+    }, 2400);
 
     const t5 = setTimeout(() => {
       if (isRescan === 'true') {
@@ -330,7 +330,7 @@ export default function AIAnalysisScreen() {
           },
         });
       }
-    }, 4900);
+    }, 2700);
 
     return () => {
       clearTimeout(t1);

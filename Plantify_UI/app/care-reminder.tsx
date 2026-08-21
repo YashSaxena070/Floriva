@@ -23,7 +23,7 @@ const TIME_HOUR: Record<string, number> = {
 export default function CareReminderScreen() {
   const router = useRouter();
   const { plantName = 'Snake Plant' } = useLocalSearchParams<{ plantName?: string }>();
-  const { saveReminder } = useUser();
+  const { isLoggedIn, saveReminder } = useUser();
 
   // Dynamic recommendation logic based on plant name
   const getRecommendations = (name: string) => {
@@ -61,6 +61,11 @@ export default function CareReminderScreen() {
   const successAnim = useState(new Animated.Value(0))[0];
 
   const handleSave = () => {
+    if (!isLoggedIn) {
+      router.push('/login' as any);
+      return;
+    }
+
     // Save to context + AsyncStorage
     saveReminder({
       plantName,

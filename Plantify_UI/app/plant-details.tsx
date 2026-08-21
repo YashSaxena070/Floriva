@@ -187,7 +187,7 @@ export default function PlantDetailsScreen() {
   };
 
   const [activeTab, setActiveTab] = useState('Overview');
-  const { savedPlants, savePlant, removePlant, addRecentScan, addHealthScan, updateCategoryRatings, reminders } = useUser();
+  const { isLoggedIn, savedPlants, savePlant, removePlant, addRecentScan, addHealthScan, updateCategoryRatings, reminders } = useUser();
 
   const isAlreadySaved = savedPlants.some((p) => p.name === commonName);
   const [isSaved, setIsSaved] = useState(isAlreadySaved);
@@ -692,6 +692,10 @@ Do not answer non-plant questions.`;
   };
 
   const handleSaveToggle = () => {
+    if (!isLoggedIn) {
+      router.push('/login' as any);
+      return;
+    }
     if (!isSaved) {
       const initialScore = healthAnalysis.healthScore;
       savePlant({

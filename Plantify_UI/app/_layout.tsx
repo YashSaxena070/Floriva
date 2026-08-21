@@ -19,7 +19,8 @@ const isUUID = (str: string): boolean =>
 
 // Create User Context
 export const UserContext = createContext({
-  userName: 'User',
+  isLoggedIn: false,
+  userName: 'Guest',
   setUserName: (name: string) => { },
   scansCount: 0,
   setScansCount: (count: number) => { },
@@ -35,7 +36,7 @@ export const UserContext = createContext({
   removeRecentScan: (id: string) => { },
   reminders: [] as any[],
   saveReminder: (reminder: any) => { },
-  addHealthScan: (plantName: string, score: number, imageUri?: string, categoryRatings?: any) => { },
+  addHealthScan: (plantName: string, score: number, imageUri?: string, categoryRatings?: any, issue?: string) => { },
   updateCategoryRatings: (plantName: string, ratings: any) => { },
   logout: async () => { },
   refreshUserData: async () => { },
@@ -57,7 +58,8 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
-  const [userName, setUserName] = useState('User');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userName, setUserName] = useState('Guest');
   const [scansCount, setScansCount] = useState(0);
   const [userAvatar, setUserAvatar] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState('');
@@ -94,14 +96,15 @@ export default function RootLayout() {
 
   /**
    * Refreshes all user data dynamically from the PostgreSQL database.
-   * Completely bypasses and purges client-side AsyncStorage caching.
+   * Checks token validity, loads profile and user plants.
    */
   const refreshUserData = useCallback(async () => {
     setIsLoadingUserData(true);
     try {
       const isAuthed = await api.isAuthenticated();
       if (!isAuthed) {
-        setUserName('User');
+        setIsLoggedIn(false);
+        setUserName('Guest');
         setUserEmail('');
         setUserAvatar(null);
         setSavedPlants([]);
@@ -115,27 +118,65 @@ export default function RootLayout() {
       try {
         const user = await api.getMe();
         if (user) {
-          setUserName(user.name || user.email.split('@')[0]);
+          setIsLoggedIn(true);
+          setUserName(user.name || user.email.split('@')[0] || 'User');
           setUserEmail(user.email);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Could not fetch user profile from DB:', err);
+        if (err?.status === 401 || err?.errorCode === 'UNAUTHORIZED_ERROR') {
+          await api.logout();
+          setIsLoggedIn(false);
+          setUserName('Guest');
+          setUserEmail('');
+          setUserAvatar(null);
+          setSavedPlants([]);
+          setRecentScans([]);
+          setReminders([]);
+          setScansCount(0);
+          return;
+        }
       }
 
       // 2. Fetch authenticated user's plants directly from Backend DB
       try {
         const dbPlants: PlantData[] = await api.getPlants();
         if (Array.isArray(dbPlants)) {
-          const mapped = dbPlants.map((p) => ({
-            id: p.id,
-            name: p.name,
-            botanicalName: p.scientific_name || p.name,
-            imageUri: p.image_url || resolveLocalUri(p.image_url) || 'https://images.unsplash.com/photo-1596547609652-9cf5d8d76921?q=80&w=300&auto=format&fit=crop',
-            confidence: p.identification_confidence ? Math.round(p.identification_confidence * 100) : 95,
-            nextWatering: 'In 3 days',
-            lastScannedDate: new Date(p.created_at).getTime(),
-            created_at: p.created_at,
-          }));
+          const mapped = dbPlants.map((p) => {
+            const rawTimeline = Array.isArray(p.health_timeline) ? p.health_timeline : [];
+            const healthHistory = rawTimeline.length > 0
+              ? rawTimeline.map((pt) => ({
+                  id: pt.id,
+                  scanId: pt.scan_id,
+                  date: pt.date,
+                  score: pt.score,
+                  healthStatus: pt.health_status,
+                  issue: pt.issue,
+                  imageUri: pt.image_url,
+                }))
+              : [
+                  {
+                    date: new Date(p.created_at).getTime(),
+                    score: p.identification_confidence ? Math.round(p.identification_confidence * 100) : 95,
+                  },
+                ];
+
+            const latestTimestamp = healthHistory.length > 0
+              ? healthHistory[healthHistory.length - 1].date
+              : new Date(p.created_at).getTime();
+
+            return {
+              id: p.id,
+              name: p.name,
+              botanicalName: p.scientific_name || p.name,
+              imageUri: p.image_url || resolveLocalUri(p.image_url) || 'https://images.unsplash.com/photo-1596547609652-9cf5d8d76921?q=80&w=300&auto=format&fit=crop',
+              confidence: p.identification_confidence ? Math.round(p.identification_confidence * 100) : 95,
+              nextWatering: 'In 3 days',
+              lastScannedDate: latestTimestamp,
+              healthHistory,
+              created_at: p.created_at,
+            };
+          });
 
           setSavedPlants(mapped);
           setScansCount(mapped.length);
@@ -318,28 +359,61 @@ export default function RootLayout() {
     });
   };
 
-  const addHealthScan = (
+  const addHealthScan = async (
     plantName: string,
     score: number,
     imageUri?: string,
-    categoryRatings?: { water: number; sunlight: number; humidity: number; growth: number; overall: number }
+    categoryRatings?: { water: number; sunlight: number; humidity: number; growth: number; overall: number },
+    issue?: string,
   ) => {
+    const scanDate = Date.now();
+    const roundedScore = Math.round(score);
+
+    // 1. Optimistic in-memory update
     setSavedPlants((prev) =>
       prev.map((p) => {
         if (p.name === plantName || p.botanicalName === plantName) {
           const history = Array.isArray(p.healthHistory) ? p.healthHistory : [];
           return {
             ...p,
-            confidence: score,
-            lastScannedDate: Date.now(),
+            confidence: roundedScore,
+            lastScannedDate: scanDate,
             imageUri: imageUri || p.imageUri,
-            healthHistory: [...history, { date: Date.now(), score: Math.round(score) }],
+            healthHistory: [...history, { date: scanDate, score: roundedScore, issue, imageUri }],
             categoryRatings: categoryRatings || p.categoryRatings,
           };
         }
         return p;
       })
     );
+
+    // 2. Persist to Backend PostgreSQL Database
+    try {
+      const isAuthed = await api.isAuthenticated();
+      if (isAuthed) {
+        const targetPlant = savedPlants.find(
+          (p) => p.name === plantName || p.botanicalName === plantName
+        );
+        if (targetPlant && isUUID(targetPlant.id)) {
+          await api.addPlantHealthScan(targetPlant.id, {
+            score: roundedScore,
+            health_status:
+              roundedScore >= 90
+                ? 'Excellent'
+                : roundedScore >= 80
+                ? 'Good'
+                : roundedScore >= 70
+                ? 'Fair'
+                : 'Needs Care',
+            issue: issue || 'Health scan record',
+            image_url: imageUri,
+            date: scanDate,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to persist health scan to database:', err);
+    }
   };
 
   const updateCategoryRatings = (
@@ -363,16 +437,18 @@ export default function RootLayout() {
   const logout = async () => {
     try {
       await api.logout();
+    } catch (err) {
+      console.error('Failed to log out:', err);
+    } finally {
       // Reset all user data in state
-      setUserName('User');
+      setIsLoggedIn(false);
+      setUserName('Guest');
       setUserEmail('');
       setUserAvatar(null);
       setSavedPlants([]);
       setRecentScans([]);
       setReminders([]);
       setScansCount(0);
-    } catch (err) {
-      console.error('Failed to log out:', err);
     }
   };
 
@@ -403,6 +479,7 @@ export default function RootLayout() {
 
   return (
     <UserContext.Provider value={{
+      isLoggedIn,
       userName,
       setUserName: updateUserName,
       scansCount,
@@ -439,7 +516,13 @@ export default function RootLayout() {
           <Stack.Screen name="camera" />
           <Stack.Screen name="upload-progress" />
           <Stack.Screen name="ai-analysis" />
+          <Stack.Screen name="disease-detection-result" />
+          <Stack.Screen name="disease-care-plan" />
+          <Stack.Screen name="recommended-products" />
+          <Stack.Screen name="cart" />
           <Stack.Screen name="plant-details" />
+          <Stack.Screen name="plant-health-timeline" />
+          <Stack.Screen name="nearby-plants" />
           <Stack.Screen name="care-reminder" />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal', headerShown: true }} />
         </Stack>

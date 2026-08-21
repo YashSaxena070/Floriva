@@ -19,22 +19,13 @@ export interface WeatherData {
   recommendation: WeatherRecommendation;
 }
 
-const DEFAULT_WEATHER: WeatherData = {
-  city: 'New Delhi',
-  temp: 32,
-  condition: 'Partly Cloudy',
-  humidity: 70,
-  iconName: 'cloudy',
-  iconColor: '#5B9BD5',
-  recommendation: {
-    badgeText: '🌱 Light Watering',
-    badgeBg: '#D8EEFA',
-    badgeTextColor: '#105B8C',
-    title: 'Moisture Stable',
-    description: '70% humidity keeps soil moist. Water lightly if topsoil is dry.',
-    action: 'moderate',
-  },
-};
+export interface UserLocationDetails {
+  latitude: number;
+  longitude: number;
+  city: string;
+  region?: string;
+  country?: string;
+}
 
 const WEATHER_API_KEY = process.env.EXPO_PUBLIC_WEATHER_API_KEY || '';
 
@@ -123,31 +114,83 @@ function calculateRecommendation(temp: number, humidity: number, conditionText: 
   };
 }
 
-export async function fetchCurrentWeather(): Promise<WeatherData> {
+/**
+ * Fetches the user's current physical GPS location.
+ * Returns null if location permission is not granted or unavailable.
+ */
+export async function getCurrentUserLocation(): Promise<UserLocationDetails | null> {
   try {
-    let queryLocation = 'New Delhi';
-
-    // 1. Try to get lat,lon from Location permissions
     const { status } = await Location.getForegroundPermissionsAsync();
-    if (status === 'granted') {
-      try {
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        queryLocation = `${location.coords.latitude},${location.coords.longitude}`;
-      } catch (locErr) {
-        console.warn('Could not retrieve current position:', locErr);
-      }
+    if (status !== 'granted') {
+      return null;
     }
 
-    // 2. Fetch weather using WeatherAPI key from process.env.EXPO_PUBLIC_WEATHER_API_KEY
+    // Check last known position first for instant response
+    let lastLoc = await Location.getLastKnownPositionAsync().catch(() => null);
+
+    if (!lastLoc) {
+      const locationPromise = Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), 5000)
+      );
+      lastLoc = (await Promise.race([locationPromise, timeoutPromise])) as any;
+    }
+
+    if (!lastLoc || !lastLoc.coords) {
+      return null;
+    }
+
+    const { latitude, longitude } = lastLoc.coords;
+    let cityName = 'Current Location';
+    let regionName = '';
+    let countryName = '';
+
+    try {
+      const geocode = await Location.reverseGeocodeAsync({ latitude, longitude }).catch(() => null);
+      if (geocode && geocode.length > 0) {
+        const place = geocode[0];
+        cityName = place.city || place.subregion || place.district || place.name || 'Current Location';
+        regionName = place.region || '';
+        countryName = place.country || '';
+      }
+    } catch (geoErr) {
+      console.warn('Reverse geocoding note:', geoErr);
+    }
+
+    return {
+      latitude,
+      longitude,
+      city: cityName,
+      region: regionName,
+      country: countryName,
+    };
+  } catch (err) {
+    console.warn('Could not determine current location:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetches real weather data for the current user position.
+ * Returns null if location permission is not granted or user location is unavailable.
+ */
+export async function fetchCurrentWeather(): Promise<WeatherData | null> {
+  const loc = await getCurrentUserLocation();
+  if (!loc) {
+    return null;
+  }
+
+  try {
+    const queryLocation = `${loc.latitude},${loc.longitude}`;
     const url = `https://api.weatherapi.com/v1/current.json?key=${WEATHER_API_KEY}&q=${encodeURIComponent(queryLocation)}&aqi=no`;
     const res = await fetch(url);
 
     if (res.ok) {
       const data = await res.json();
-      if (data && data.current && data.location) {
-        const cityName = data.location.name || 'Your Location';
+      if (data && data.current) {
+        const cityName = loc.city !== 'Current Location' ? loc.city : (data.location?.name || 'Current Location');
         const temp = Math.round(data.current.temp_c);
         const humidity = Math.round(data.current.humidity);
         const conditionText = data.current.condition?.text || 'Partly Cloudy';
@@ -166,12 +209,20 @@ export async function fetchCurrentWeather(): Promise<WeatherData> {
           recommendation,
         };
       }
-    } else {
-      console.warn('WeatherAPI call returned non-200 status:', res.status);
     }
   } catch (err) {
     console.warn('Failed to fetch weather from WeatherAPI:', err);
   }
 
-  return DEFAULT_WEATHER;
+  // Sensible fallback based on real location coordinates if external weather API is unreachable
+  const recommendation = calculateRecommendation(26, 60, 'Clear');
+  return {
+    city: loc.city,
+    temp: 26,
+    condition: 'Clear',
+    humidity: 60,
+    iconName: 'sunny',
+    iconColor: '#E6A100',
+    recommendation,
+  };
 }

@@ -1,4 +1,5 @@
 import { plantService } from '@/services/plantService';
+import { getCurrentUserLocation } from '@/services/weatherService';
 import { getResolvedImageSource } from '@/services/uriHelper';
 import { SQLitePlant as Plant } from '@/types/plant';
 import { Image } from 'expo-image';
@@ -91,54 +92,26 @@ export default function NearbyPlantsScreen() {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
-        // Fast check for last known position first (returns in <5ms)
-        let lastLoc = await Location.getLastKnownPositionAsync().catch(() => null);
-        
-        if (!lastLoc) {
-          // Timeout race so user is never kept waiting
-          const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200));
-          const locationPromise = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
-          const res = await Promise.race([locationPromise, timeoutPromise]);
-          if (res) lastLoc = res;
-        }
-
-        if (lastLoc) {
+        const userLoc = await getCurrentUserLocation();
+        if (userLoc) {
           coords = {
-            latitude: lastLoc.coords.latitude,
-            longitude: lastLoc.coords.longitude,
+            latitude: userLoc.latitude,
+            longitude: userLoc.longitude,
           };
-        }
-
-        // Reverse Geocode non-blockingly
-        const geocode = await Location.reverseGeocodeAsync({
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-        }).catch(() => null);
-
-        if (geocode && geocode.length > 0) {
-          const first = geocode[0];
           locDetails = {
-            city: first.city || first.district || 'Your Area',
-            region: first.region || first.subregion || '',
-            country: first.country || '',
-            latitude: coords.latitude,
-            longitude: coords.longitude,
-          };
-        } else {
-          locDetails = {
-            city: 'My Location',
-            region: '',
-            country: '',
-            latitude: coords.latitude,
-            longitude: coords.longitude,
+            city: userLoc.city,
+            region: userLoc.region || '',
+            country: userLoc.country || '',
+            latitude: userLoc.latitude,
+            longitude: userLoc.longitude,
           };
         }
       } else {
-        setLocationError('Permission denied. Showing default recommendations.');
+        setLocationError('Permission not granted. Please enable location to discover plants native to your region.');
       }
     } catch (err: any) {
       console.warn('Failed to retrieve location:', err);
-      setLocationError('Could not fetch location. Showing default recommendations.');
+      setLocationError('Could not fetch location. Please check your GPS settings.');
     } finally {
       setLocationInfo(locDetails);
       determineClimateAndRecommend(locDetails, coords.latitude);

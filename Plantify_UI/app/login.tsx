@@ -84,13 +84,8 @@ export default function LoginScreen() {
       await refreshUserData();
       await navigateAfterAuth();
     } catch (err: any) {
-      console.warn('Backend login failed, attempting demo/offline fallback:', err);
-      // Fallback for seamless local usage
-      const fallbackName = cleanEmail.split('@')[0];
-      setUserName(fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1));
-      setUserEmail(cleanEmail);
-      await refreshUserData();
-      await navigateAfterAuth();
+      console.warn('Backend login failed:', err);
+      setErrorMessage(err?.message || 'Invalid email or password. Please check your credentials.');
     } finally {
       setIsLoading(false);
     }

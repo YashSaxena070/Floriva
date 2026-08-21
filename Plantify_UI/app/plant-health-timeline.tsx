@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -8,8 +8,12 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path, Circle, Line, Text as SvgText, Rect, LinearGradient, Stop, Defs } from 'react-native-svg';
 import { useUser } from './_layout';
 import { analyzePlantHealth } from '@/services/plantHealthService';
+import { api, HealthTimelinePointData } from '@/services/api';
 
 const { width } = Dimensions.get('window');
+
+const isUUID = (str: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
 interface HealthScanPoint {
   date: string;
@@ -53,6 +57,27 @@ export default function PlantHealthTimelineScreen() {
 
   const [selectedRange, setSelectedRange] = useState('Last 1 Month');
   const [showRangeDropdown, setShowRangeDropdown] = useState(false);
+  const [dbTimeline, setDbTimeline] = useState<HealthTimelinePointData[] | null>(null);
+
+  // Fetch real-time health timeline from backend DB
+  useEffect(() => {
+    const fetchTimeline = async () => {
+      if (matchingPlant && isUUID(matchingPlant.id)) {
+        try {
+          const isAuthed = await api.isAuthenticated();
+          if (isAuthed) {
+            const data = await api.getPlantHealthTimeline(matchingPlant.id);
+            if (Array.isArray(data) && data.length > 0) {
+              setDbTimeline(data);
+            }
+          }
+        } catch (err) {
+          console.warn('Could not fetch DB health timeline:', err);
+        }
+      }
+    };
+    fetchTimeline();
+  }, [matchingPlant]);
 
   // Compute dynamic health analysis for score consistency
   const healthAnalysis = useMemo(() => {
@@ -68,8 +93,16 @@ export default function PlantHealthTimelineScreen() {
   // Parse current score (minimum 65)
   const latestScore = paramScore ? parseInt(paramScore, 10) : (healthAnalysis.healthScore || matchingPlant?.confidence || 65);
 
-  // Get real health history from the saved plant, ensuring raw stored confidence scores (e.g. 41%) are sanitized to healthScore (min 65%)
+  // Get real health history from database / saved plant
   const rawHistory: { date: number; score: number }[] = useMemo(() => {
+    if (dbTimeline && dbTimeline.length > 0) {
+      return dbTimeline
+        .map((pt) => ({
+          date: pt.date,
+          score: Math.max(65, Math.min(99, Math.round(pt.score))),
+        }))
+        .sort((a, b) => a.date - b.date);
+    }
     if (matchingPlant?.healthHistory && Array.isArray(matchingPlant.healthHistory)) {
       return matchingPlant.healthHistory
         .map((h: any) => ({
@@ -79,7 +112,7 @@ export default function PlantHealthTimelineScreen() {
         .sort((a: any, b: any) => a.date - b.date);
     }
     return [];
-  }, [matchingPlant?.healthHistory, healthAnalysis.healthScore]);
+  }, [dbTimeline, matchingPlant?.healthHistory, healthAnalysis.healthScore]);
 
   // Filter by selected date range
   const filteredHistory = useMemo(() => {

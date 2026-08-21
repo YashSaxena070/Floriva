@@ -62,6 +62,71 @@ class PlantService:
         plant = self.get_plant(plant_id, user_id)
         return self.plant_repo.update(plant, update_data)
 
+    def format_plant_response(self, plant: Plant) -> dict:
+        """Format a plant model into PlantResponse dictionary with health_timeline."""
+        timeline = self.plant_repo.build_health_timeline(plant)
+        images = [
+            {
+                "id": img.id,
+                "image_url": img.image_url,
+                "image_type": img.image_type,
+                "created_at": img.created_at,
+            }
+            for img in (plant.images or [])
+        ]
+        return {
+            "id": plant.id,
+            "user_id": plant.user_id,
+            "name": plant.name,
+            "scientific_name": plant.scientific_name,
+            "identification_confidence": plant.identification_confidence,
+            "image_url": plant.image_url,
+            "created_at": plant.created_at,
+            "updated_at": plant.updated_at,
+            "images": images,
+            "health_timeline": timeline,
+        }
+
+    def add_health_scan(
+        self,
+        plant_id: uuid.UUID,
+        user_id: uuid.UUID,
+        score: int,
+        health_status: Optional[str] = None,
+        issue: Optional[str] = None,
+        image_url: Optional[str] = None,
+        date_ms: Optional[int] = None,
+    ) -> dict:
+        """Record a health scan for a plant and return the created timeline point."""
+        plant = self.get_plant(plant_id, user_id)
+        ha = self.plant_repo.add_health_scan(
+            plant=plant,
+            score=score,
+            health_status=health_status,
+            issue=issue,
+            image_url=image_url,
+            date_ms=date_ms,
+        )
+        return {
+            "id": ha.id,
+            "scan_id": ha.scan_id,
+            "date": int(ha.created_at.timestamp() * 1000),
+            "score": score,
+            "health_status": ha.health_status,
+            "issue": ha.issue,
+            "image_url": image_url or plant.image_url,
+            "created_at": ha.created_at,
+        }
+
+    def get_health_timeline(
+        self,
+        plant_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[dict]:
+        """Fetch chronological health timeline for a plant."""
+        plant = self.get_plant(plant_id, user_id)
+        return self.plant_repo.build_health_timeline(plant)
+
     def delete_plant(self, plant_id: uuid.UUID, user_id: uuid.UUID) -> None:
         """
         Delete a plant, ensuring ownership.

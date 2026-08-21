@@ -186,3 +186,52 @@ class TestPlantOwnership:
         # Verify the plant still exists for user A
         response = client.get(f"/api/plants/{plant_id}", headers=auth_headers)
         assert response.status_code == 200
+
+
+class TestPlantHealthTimeline:
+    """Tests for plant health timeline recording and retrieval."""
+
+    def test_plant_created_with_initial_timeline_record(
+        self, client: TestClient, auth_headers: dict, test_plant_data: dict
+    ):
+        """When a plant is created, its baseline health scan is stored in the database."""
+        response = client.post(
+            "/api/plants", json=test_plant_data, headers=auth_headers
+        )
+        assert response.status_code == 201
+        data = response.json()["data"]
+        assert "health_timeline" in data
+        assert len(data["health_timeline"]) >= 1
+        assert data["health_timeline"][0]["score"] in (95, 96)
+
+    def test_record_health_scan_and_fetch_timeline(
+        self, client: TestClient, auth_headers: dict, created_plant: dict
+    ):
+        """User can record new health scans and retrieve the chronological timeline."""
+        plant_id = created_plant["id"]
+
+        # Record a new scan with a lower health score
+        rescan = client.post(
+            f"/api/plants/{plant_id}/health-scans",
+            json={
+                "score": 82,
+                "health_status": "Good",
+                "issue": "Slight underwatering detected",
+            },
+            headers=auth_headers,
+        )
+        assert rescan.status_code == 201
+        rescan_data = rescan.json()["data"]
+        assert rescan_data["score"] == 82
+        assert rescan_data["health_status"] == "Good"
+
+        # Fetch timeline endpoint
+        timeline_res = client.get(
+            f"/api/plants/{plant_id}/health-timeline",
+            headers=auth_headers,
+        )
+        assert timeline_res.status_code == 200
+        timeline = timeline_res.json()["data"]
+        assert len(timeline) >= 2
+        scores = [pt["score"] for pt in timeline]
+        assert 82 in scores

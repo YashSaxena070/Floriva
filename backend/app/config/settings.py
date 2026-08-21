@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # ── JWT Authentication ────────────────────────────────────
     JWT_SECRET: str = "change-this-secret-in-production"
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200  # 30 days for persistent mobile app sessions
 
     # ── CORS ──────────────────────────────────────────────────
     CLIENT_URL: str = "http://localhost:8081"

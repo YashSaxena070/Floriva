@@ -47,7 +47,7 @@ const formatNextWatering = (nextWatering: string) => {
 
 export default function MyGardenScreen() {
   const router = useRouter();
-  const { savedPlants, removePlant, reminders, refreshUserData, isLoadingUserData } = useUser();
+  const { isLoggedIn, savedPlants, removePlant, reminders, refreshUserData, isLoadingUserData } = useUser();
   const [searchQuery, setSearchQuery] = useState('');
   const [plantToDelete, setPlantToDelete] = useState<any | null>(null);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -132,11 +132,22 @@ export default function MyGardenScreen() {
               contentFit="contain"
             />
             <Text style={styles.emptyStateTitle}>
-              {searchQuery ? "No plants found" : "Your collection is empty"}
+              {!isLoggedIn ? "Sign In to View Your Garden" : (searchQuery ? "No plants found" : "Your collection is empty")}
             </Text>
             <Text style={styles.emptyStateSub}>
-              {searchQuery ? "Try searching for a different plant name or location." : "Identify plants and tap save to build your garden! 🌿"}
+              {!isLoggedIn
+                ? "Log in to save, sync, and care for all your plants across your devices."
+                : (searchQuery ? "Try searching for a different plant name or location." : "Identify plants and tap save to build your garden! 🌿")}
             </Text>
+            {!isLoggedIn && (
+              <TouchableOpacity
+                style={styles.gardenLoginBtn}
+                activeOpacity={0.85}
+                onPress={() => router.push('/login' as any)}
+              >
+                <Text style={styles.gardenLoginBtnText}>Log In / Sign Up</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           filteredPlants.map((plant) => {
@@ -246,7 +257,16 @@ export default function MyGardenScreen() {
         <TouchableOpacity 
           style={styles.addPlantButton}
           activeOpacity={0.85}
-          onPress={() => router.push('/camera')}
+          onPress={() => {
+            if (!isLoggedIn) {
+              router.push({
+                pathname: '/login' as any,
+                params: { action: 'scan' },
+              });
+            } else {
+              router.push('/camera');
+            }
+          }}
         >
           <Text style={styles.addPlantText}>+ Add Plant</Text>
         </TouchableOpacity>
@@ -648,5 +668,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  gardenLoginBtn: {
+    marginTop: 16,
+    backgroundColor: '#4E8C44',
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    borderRadius: 14,
+    shadowColor: '#4E8C44',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  gardenLoginBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

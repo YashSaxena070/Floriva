@@ -34,9 +34,11 @@ export default function SmartWateringScreen() {
     async function loadWeather() {
       try {
         const weather = await fetchCurrentWeather();
-        setTemp(weather.temp);
-        setCondition(weather.condition);
-        setHumidity(weather.humidity);
+        if (weather) {
+          setTemp(weather.temp);
+          setCondition(weather.condition);
+          setHumidity(weather.humidity);
+        }
       } catch (err) {
         console.warn('Failed to load weather in Smart Watering screen:', err);
       } finally {

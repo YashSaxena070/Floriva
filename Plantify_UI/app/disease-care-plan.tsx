@@ -87,6 +87,53 @@ const DISEASE_CARE_DATABASE: Record<string, CarePlanData> = {
     ],
     recoveryTime: '2 – 3 weeks',
   },
+  'rose': {
+    immediateActions: [
+      'Deadhead wilted blooms and prune spotted stems with clean shears',
+      'Avoid wetting petals or leaves during daytime watering',
+      'Ensure 6+ hours direct sunlight and good air circulation',
+    ],
+    treatments: [
+      { name: 'Copper Bio-Fungicide Spray', instruction: 'Spray foliage and buds every 7 days to eliminate fungal spores.' },
+      { name: 'Rose Bloom Booster Fertilizer', instruction: 'Feed monthly with potassium-rich organic rose food.' },
+    ],
+    recoveryTime: '2 – 3 weeks',
+  },
+  'petal blight': {
+    immediateActions: [
+      'Remove all decaying or discolored flowers immediately',
+      'Clean fallen petals around soil base to remove fungal inoculum',
+      'Space plants to increase sun exposure and cross-ventilation',
+    ],
+    treatments: [
+      { name: 'Systemic Fungicide Spray', instruction: 'Apply weekly at earliest sign of petal discoloration.' },
+      { name: 'Organic Neem Oil Solution', instruction: 'Spray in early evening on lower stems and leaf joints.' },
+    ],
+    recoveryTime: '1 – 2 weeks',
+  },
+  'black spot': {
+    immediateActions: [
+      'Prune affected leaves immediately (do not compost them)',
+      'Water only at the root base early in the morning',
+      'Clean all tools with rubbing alcohol between cuts',
+    ],
+    treatments: [
+      { name: 'Sulfur Dust / Copper Spray', instruction: 'Apply to upper and lower leaf surfaces every 7 to 10 days.' },
+      { name: 'Foliar Plant Tonic', instruction: 'Apply micronutrient spray to rebuild leaf tissue.' },
+    ],
+    recoveryTime: '2 – 4 weeks',
+  },
+  'botrytis': {
+    immediateActions: [
+      'Isolate plant and cut off grayish-brown moldy flowers',
+      'Reduce ambient humidity and increase room airflow',
+      'Keep plant dry and move into bright sunlight',
+    ],
+    treatments: [
+      { name: 'Bio-Fungicide Treatment', instruction: 'Apply broad-spectrum bio-fungicide to prevent spread.' },
+    ],
+    recoveryTime: '2 weeks',
+  },
 };
 
 function getCuratedCarePlan(diseaseName: string, isHealthy: boolean): CarePlanData {
@@ -136,6 +183,7 @@ export default function DiseaseCarePlanScreen() {
 
   const plantName = params.plantName || 'French Rose';
   const diseaseName = params.diseaseName || 'Powdery Mildew';
+  const severity = params.severity || 'medium';
   const scanId = params.scanId || '';
   const isHealthy =
     diseaseName.toLowerCase().includes('healthy') ||
@@ -158,7 +206,7 @@ export default function DiseaseCarePlanScreen() {
             const rec = await api.getScanRecommendation(scanId);
             if (rec?.treatment && rec?.treatment?.recommended_actions?.length > 0) {
               setCarePlan({
-                immediateActions: rec.treatment.recommended_actions.slice(0, 3),
+                immediateActions: rec.treatment.recommended_actions,
                 treatments: [
                   {
                     name: rec.treatment.product_category || 'Recommended Treatment',
@@ -175,19 +223,21 @@ export default function DiseaseCarePlanScreen() {
 
         // 2. Fetch recommended treatment products from backend
         try {
-          const products = await api.getRecommendedProducts({
-            disease_name: diseaseName,
-            plant_name: plantName,
-          });
-          if (products && products.length > 0) {
-            setRecommendedProducts(products);
+          if (scanId) {
+            const recData = await api.getRecommendedProductsForScan(scanId);
+            if (recData?.recommendations?.length > 0) {
+              setRecommendedProducts(recData.recommendations.map(r => r.product));
+            }
+          }
+          const catalog = await api.getProducts();
+          if (catalog && catalog.length > 0) {
+            setRecommendedProducts((prev) => (prev.length > 0 ? prev : catalog.slice(0, 3)));
           }
         } catch {
-          // If no specific recommendations, fetch top catalog products
           try {
-            const catalog = await api.getProducts({ pageSize: 2 });
-            if (catalog?.items?.length > 0) {
-              setRecommendedProducts(catalog.items);
+            const catalog = await api.getProducts();
+            if (catalog && catalog.length > 0) {
+              setRecommendedProducts(catalog.slice(0, 3));
             }
           } catch (catalogErr) {
             console.warn('Could not fetch catalog products:', catalogErr);
@@ -345,7 +395,7 @@ export default function DiseaseCarePlanScreen() {
                   <View style={styles.productInfoCol}>
                     <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
                     <Text style={styles.productPrice}>
-                      ${product.price.toFixed(2)} • {product.retailer_name || 'Plantify Care'}
+                      ₹{product.price.toFixed(2)} • {product.brand || 'Plantify Care'}
                     </Text>
                   </View>
 
@@ -374,6 +424,34 @@ export default function DiseaseCarePlanScreen() {
             })}
           </View>
         )}
+
+        {/* View All Recommended Products Action Banner */}
+        <TouchableOpacity
+          style={styles.exploreProductsActionCard}
+          activeOpacity={0.88}
+          onPress={() =>
+            router.push({
+              pathname: '/recommended-products',
+              params: {
+                plantName,
+                diseaseName,
+                severity,
+                scanId: scanId || '',
+              },
+            })
+          }
+        >
+          <View style={styles.exploreProductsLeft}>
+            <Text style={styles.exploreProductsBadge}>🛍️ TREATMENT PRODUCTS</Text>
+            <Text style={styles.exploreProductsTitle}>View All Recommended Products</Text>
+            <Text style={styles.exploreProductsSub}>
+              Explore verified fungicides, sprays, organic cures & retailer buy links.
+            </Text>
+          </View>
+          <View style={styles.exploreProductsArrowBg}>
+            <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+          </View>
+        </TouchableOpacity>
       </ScrollView>
 
       {/* Sticky Bottom Tab Bar */}
@@ -641,6 +719,51 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  exploreProductsActionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1E5322',
+    borderRadius: 18,
+    padding: 16,
+    marginTop: 8,
+    marginBottom: 16,
+    shadowColor: '#1E5322',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  exploreProductsLeft: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  exploreProductsBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#A3E635',
+    letterSpacing: 0.3,
+    marginBottom: 4,
+  },
+  exploreProductsTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginBottom: 2,
+  },
+  exploreProductsSub: {
+    fontSize: 11,
+    color: '#D1FAE5',
+    lineHeight: 15,
+  },
+  exploreProductsArrowBg: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   footerWrapper: {
     position: 'absolute',

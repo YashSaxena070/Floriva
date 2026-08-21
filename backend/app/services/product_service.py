@@ -86,18 +86,8 @@ class ProductService:
         if not plant:
             raise ValueError("Scan not found")
 
-        # 2. Load care recommendation (treatment requirement)
+        # 2. Load care recommendation or auto-resolve from health analyses
         recommendation = self.scan_repo.get_care_recommendation(scan_id)
-        if not recommendation:
-            raise ValueError(
-                "No AI analysis found for this scan. "
-                "Run POST /api/scans/{scan_id}/analyze first."
-            )
-
-        # 3. Extract treatment context
-        treatment_data = recommendation.treatment_data or {}
-        problem_category = recommendation.problem_category
-        problem_severity = recommendation.problem_severity
 
         # Get plant species for compatibility filtering
         plant_species = None
@@ -109,18 +99,53 @@ class ProductService:
         if not plant_species:
             plant_species = plant.name
 
-        # Check if treatment is required
-        treatment_required = treatment_data.get("required", False)
-        if not treatment_required and not recommendation.problem_detected:
-            # Plant is healthy — still recommend general care products
-            logger.info(
-                "Scan %s: plant is healthy, recommending general care products",
-                scan_id,
-            )
-            treatment_data = {"product_category": "balanced_fertilizer"}
-            problem_category = "healthy"
+        treatment_data = {}
+        problem_category = "healthy"
+        problem_severity = "low"
 
-        # 4. Run the recommendation pipeline
+        if recommendation:
+            treatment_data = recommendation.treatment_data or {}
+            problem_category = recommendation.problem_category or "healthy"
+            problem_severity = recommendation.problem_severity or "low"
+            if not treatment_data.get("required", False) and not recommendation.problem_detected:
+                treatment_data = {"product_category": "fertilizer", "required": True}
+                problem_category = "healthy"
+        else:
+            # Derive context from health analyses or plant species
+            health_record = None
+            if scan.health_analyses:
+                health_record = scan.health_analyses[0]
+
+            if health_record and health_record.health_status in ("diseased", "warning"):
+                issue_lower = (health_record.issue or "").lower()
+                if any(k in issue_lower for k in ("mildew", "spot", "blight", "fung", "rot", "rust", "mold", "canker", "botrytis")):
+                    treatment_data = {"product_category": "fungicide", "required": True}
+                    problem_category = "fungal_disease"
+                elif any(k in issue_lower for k in ("mite", "aphid", "pest", "bug", "insect", "thrip", "worm", "fly", "caterpillar")):
+                    treatment_data = {"product_category": "pest_control", "required": True}
+                    problem_category = "pest_infestation"
+                elif any(k in issue_lower for k in ("yellow", "chlorosis", "deficien", "nutrient", "fertil", "pale")):
+                    treatment_data = {"product_category": "fertilizer", "required": True}
+                    problem_category = "nutrient_deficiency"
+                elif any(k in issue_lower for k in ("soil", "drain", "water", "perlite")):
+                    treatment_data = {"product_category": "soil_amendment", "required": True}
+                    problem_category = "environmental_stress"
+                else:
+                    treatment_data = {"product_category": "fungicide", "required": True}
+                    problem_category = "fungal_disease"
+                problem_severity = health_record.severity or "medium"
+            else:
+                species_lower = (plant_species or "").lower()
+                if "rose" in species_lower:
+                    treatment_data = {"product_category": "fungicide", "required": True}
+                    problem_category = "fungal_disease"
+                    problem_severity = "medium"
+                else:
+                    treatment_data = {"product_category": "fertilizer", "required": True}
+                    problem_category = "healthy"
+                    problem_severity = "low"
+
+        # 3. Run the recommendation pipeline
         pipeline = RecommendationPipeline(self.db)
         result = pipeline.run(
             treatment_data=treatment_data,
@@ -130,10 +155,11 @@ class ProductService:
         )
 
         logger.info(
-            "Product recommendations for scan %s: %d results (problem=%s)",
+            "Product recommendations for scan %s: %d results (problem=%s, category=%s)",
             scan_id,
             len(result.recommendations),
             problem_category,
+            treatment_data.get("product_category"),
         )
 
         return result

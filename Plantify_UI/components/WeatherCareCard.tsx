@@ -1,35 +1,49 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { fetchCurrentWeather, WeatherData } from '@/services/weatherService';
+import { useUser } from '@/app/_layout';
 
 export default function WeatherCareCard() {
+  const { isLoggedIn } = useUser();
   const [weather, setWeather] = useState<WeatherData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [hasPermission, setHasPermission] = useState(false);
 
   useEffect(() => {
+    if (!isLoggedIn) {
+      setWeather(null);
+      setHasPermission(false);
+      return;
+    }
     loadWeather();
-  }, []);
+  }, [isLoggedIn]);
 
   const loadWeather = async () => {
-    setLoading(true);
-    const data = await fetchCurrentWeather();
-    setWeather(data);
-    setLoading(false);
+    if (!isLoggedIn) return;
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setHasPermission(false);
+        setWeather(null);
+        return;
+      }
+      setHasPermission(true);
+      setLoading(true);
+      const data = await fetchCurrentWeather();
+      setWeather(data);
+    } catch {
+      setWeather(null);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  if (loading) {
-    return (
-      <View style={styles.cardContainer}>
-        <View style={styles.loadingInner}>
-          <ActivityIndicator size="small" color="#3B82F6" />
-          <Text style={styles.loadingText}>Fetching local weather care data...</Text>
-        </View>
-      </View>
-    );
+  // Only render if logged in, location access is granted, and weather data is available
+  if (!isLoggedIn || !hasPermission || !weather) {
+    return null;
   }
-
-  if (!weather) return null;
 
   return (
     <TouchableOpacity

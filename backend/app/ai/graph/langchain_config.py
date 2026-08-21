@@ -13,9 +13,13 @@ from app.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Active Groq LLM models
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+FALLBACK_GROQ_MODEL = "openai/gpt-oss-20b"
+
 
 def get_chat_model(
-    model_name: str = "openai/gpt-oss-120b",
+    model_name: str = DEFAULT_GROQ_MODEL,
     temperature: float = 0.2,
     max_tokens: Optional[int] = 4096,
 ) -> ChatGroq:
@@ -37,11 +41,11 @@ def get_chat_model(
 
 
 def get_vision_chat_model(
-    model_name: str = "llama-3.2-90b-vision-preview",
+    model_name: str = DEFAULT_GROQ_MODEL,
     temperature: float = 0.1,
 ) -> ChatGroq:
     """
-    Instantiate a vision-capable ChatGroq client.
+    Instantiate a ChatGroq client for structuring and analysis.
     """
     settings = get_settings()
     return ChatGroq(

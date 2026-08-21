@@ -72,6 +72,17 @@ export interface TokenData {
   user: AuthUser;
 }
 
+export interface HealthTimelinePointData {
+  id: string;
+  scan_id?: string | null;
+  date: number;
+  score: number;
+  health_status?: string | null;
+  issue?: string | null;
+  image_url?: string | null;
+  created_at: string;
+}
+
 export interface PlantData {
   id: string;
   user_id: string;
@@ -82,6 +93,7 @@ export interface PlantData {
   created_at: string;
   updated_at: string;
   images: PlantImageData[];
+  health_timeline?: HealthTimelinePointData[];
 }
 
 export interface PlantImageData {
@@ -155,24 +167,6 @@ export interface HealthAnalysisApiResult {
   lowConfidence?: boolean;
 }
 
-// ── Product & Recommendation Types ──────────────────────────────
-
-export interface ProductData {
-  id: string;
-  category_id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  price: number;
-  currency: string;
-  image_url: string | null;
-  retailer_name: string | null;
-  retailer_url: string | null;
-  is_active: boolean;
-  category_name?: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 export interface CareRecommendationData {
   id: string;
@@ -207,15 +201,74 @@ export interface CareRecommendationData {
   created_at: string;
 }
 
+export interface ProductCategoryData {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+}
+
+export interface BuyLinkData {
+  retailer: string;
+  display_name: string;
+  url: string;
+  search_query: string;
+}
+
+export interface ProductData {
+  id: string;
+  name: string;
+  brand: string | null;
+  category_id: string | null;
+  category_name?: string;
+  category_slug?: string;
+  description: string | null;
+  price: number;
+  stock: number;
+  availability?: 'in_stock' | 'low_stock' | 'out_of_stock';
+  image_url: string | null;
+  usage_instructions: string | null;
+  active: boolean;
+  compatibilities?: Array<{
+    problem_category: string;
+    plant_species: string | null;
+  }>;
+}
+
+export interface ProductRecommendationItem {
+  product: ProductData;
+  match_type: 'best_match' | 'budget_option' | 'premium_option';
+  relevance_score: number;
+  reason: string;
+  buy_links?: BuyLinkData[];
+}
+
+export interface ProductRecommendationResponseData {
+  recommendations: ProductRecommendationItem[];
+  treatment_context: {
+    problem_category: string;
+    product_category: string;
+    severity: string;
+  };
+  message: string | null;
+}
+
 export interface CartItemData {
   id: string;
   cart_id: string;
   product_id: string;
+  product_name?: string;
+  product_brand?: string | null;
+  product_image_url?: string | null;
+  price_at_addition: number;
+  current_price?: number;
+  stock?: number;
   quantity: number;
   recommendation_reason: string | null;
   scan_id: string | null;
+  buy_links?: BuyLinkData[];
   created_at: string;
-  product: ProductData;
+  product?: ProductData;
 }
 
 export interface CartData {
@@ -253,13 +306,17 @@ axiosInstance.interceptors.request.use(
 // Response interceptor: unwrap success responses, format errors
 axiosInstance.interceptors.response.use(
   (response) => response,
-  (error: AxiosError<ApiErrorResponse>) => {
+  async (error: AxiosError<ApiErrorResponse>) => {
+    if (error.response?.status === 401) {
+      // Server returned 401 Unauthorized (token expired or invalid)
+      await clearAuthData();
+    }
     if (error.response?.data) {
       const errData = error.response.data;
       return Promise.reject({
         success: false,
-        message: errData.message || 'An unexpected error occurred',
-        errorCode: errData.errorCode || 'UNKNOWN_ERROR',
+        message: errData.message || (errData as any).detail || 'An unexpected error occurred',
+        errorCode: errData.errorCode || 'UNAUTHORIZED_ERROR',
         status: error.response.status,
       });
     }
@@ -267,12 +324,56 @@ axiosInstance.interceptors.response.use(
       success: false,
       message: error.message || 'Network error',
       errorCode: 'NETWORK_ERROR',
-      status: 0,
+      status: error.response?.status || 0,
     });
   }
 );
 
 // ── Token Management ─────────────────────────────────────────────
+
+function decodeBase64(input: string): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  let str = input.replace(/=+$/, '');
+  let output = '';
+
+  if (str.length % 4 === 1) {
+    throw new Error('Invalid base64 string');
+  }
+
+  for (
+    let bc = 0, bs = 0, buffer: number, idx = 0;
+    (buffer = str.charCodeAt(idx++));
+    ~buffer && ((bs = bc % 4 ? bs * 64 + buffer : buffer), bc++ % 4)
+      ? (output += String.fromCharCode(255 & (bs >> ((-2 * bc) & 6))))
+      : 0
+  ) {
+    buffer = chars.indexOf(String.fromCharCode(buffer));
+  }
+
+  return output;
+}
+
+export function isJwtExpired(token: string | null | undefined): boolean {
+  if (!token || typeof token !== 'string') return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return true;
+    let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) {
+      base64 += '=';
+    }
+    const jsonStr = decodeBase64(base64);
+    const payload = JSON.parse(jsonStr);
+    if (!payload || !payload.exp) return false;
+    // exp is in seconds
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+    // If expired or expiring within 10 seconds, treat as expired
+    return nowInSeconds >= (payload.exp - 10);
+  } catch (err) {
+    console.warn('Failed to parse JWT token expiry:', err);
+    return true;
+  }
+}
 
 export async function saveAuthData(tokenData: TokenData): Promise<void> {
   await AsyncStorage.setItem(TOKEN_KEY, tokenData.access_token);
@@ -379,11 +480,16 @@ export const api = {
   },
 
   /**
-   * Check if a user is currently logged in.
+   * Check if a user is currently logged in with a valid unexpired token.
    */
   async isAuthenticated(): Promise<boolean> {
     const token = await getStoredToken();
-    return !!token;
+    if (!token) return false;
+    if (isJwtExpired(token)) {
+      await clearAuthData();
+      return false;
+    }
+    return true;
   },
 
   /**
@@ -453,6 +559,36 @@ export const api = {
    */
   async deletePlant(plantId: string): Promise<void> {
     await axiosInstance.delete(`/api/plants/${plantId}`);
+  },
+
+  /**
+   * Get the full health timeline history for a plant from database.
+   */
+  async getPlantHealthTimeline(plantId: string): Promise<HealthTimelinePointData[]> {
+    const response = await axiosInstance.get<ApiSuccessResponse<HealthTimelinePointData[]>>(
+      `/api/plants/${plantId}/health-timeline`
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Record a health scan/assessment for a plant and persist it to the database.
+   */
+  async addPlantHealthScan(
+    plantId: string,
+    data: {
+      score: number;
+      health_status?: string;
+      issue?: string;
+      image_url?: string;
+      date?: number;
+    }
+  ): Promise<HealthTimelinePointData> {
+    const response = await axiosInstance.post<ApiSuccessResponse<HealthTimelinePointData>>(
+      `/api/plants/${plantId}/health-scans`,
+      data
+    );
+    return response.data.data;
   },
 
   // ── Scans ──────────────────────────────────────────────────
@@ -594,15 +730,23 @@ export const api = {
   // ── Product Catalog & Recommendations ────────────────────────
 
   /**
+   * List product categories.
+   */
+  async getProductCategories(): Promise<ProductCategoryData[]> {
+    const response = await axiosInstance.get<ApiSuccessResponse<ProductCategoryData[]>>(
+      '/api/products/categories'
+    );
+    return response.data.data;
+  },
+
+  /**
    * List products from catalog.
    */
   async getProducts(params?: {
-    categoryId?: string;
+    category_id?: string;
     search?: string;
-    page?: number;
-    pageSize?: number;
-  }): Promise<{ items: ProductData[]; total: number; page: number; total_pages: number }> {
-    const response = await axiosInstance.get<ApiSuccessResponse<{ items: ProductData[]; total: number; page: number; total_pages: number }>>(
+  }): Promise<ProductData[]> {
+    const response = await axiosInstance.get<ApiSuccessResponse<ProductData[]>>(
       '/api/products',
       { params }
     );
@@ -610,16 +754,22 @@ export const api = {
   },
 
   /**
-   * Get AI-recommended products for a disease and plant.
+   * Get single product details.
    */
-  async getRecommendedProducts(payload: {
-    disease_name: string;
-    plant_name?: string;
-    category?: string;
-  }): Promise<ProductData[]> {
-    const response = await axiosInstance.post<ApiSuccessResponse<ProductData[]>>(
-      '/api/products/recommendations',
-      payload
+  async getProduct(productId: string): Promise<ProductData> {
+    const response = await axiosInstance.get<ApiSuccessResponse<ProductData>>(
+      `/api/products/${productId}`
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Get AI-recommended products for a scan.
+   */
+  async getRecommendedProductsForScan(scanId: string): Promise<ProductRecommendationResponseData> {
+    const response = await axiosInstance.post<ApiSuccessResponse<ProductRecommendationResponseData>>(
+      `/api/scans/${scanId}/recommend-products`,
+      {}
     );
     return response.data.data;
   },
@@ -646,6 +796,17 @@ export const api = {
     const response = await axiosInstance.post<ApiSuccessResponse<CartItemData>>(
       '/api/cart/items',
       payload
+    );
+    return response.data.data;
+  },
+
+  /**
+   * Update quantity of a cart item.
+   */
+  async updateCartItem(itemId: string, quantity: number): Promise<CartItemData> {
+    const response = await axiosInstance.patch<ApiSuccessResponse<CartItemData>>(
+      `/api/cart/items/${itemId}`,
+      { quantity }
     );
     return response.data.data;
   },
