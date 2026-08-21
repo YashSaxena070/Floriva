@@ -180,6 +180,18 @@ class GroqCareProvider(AIRecommendationProvider):
         self.api_key = api_key or settings.GROQ_API_KEY
         self.client = AsyncGroq(api_key=self.api_key)
 
+    async def get_care_recommendations(
+        self,
+        plant_species: str,
+        health_data: Optional[dict] = None,
+        weather_data: Optional[dict] = None,
+    ) -> dict[str, Any]:
+        """Implement AIRecommendationProvider interface."""
+        return await self.analyze(
+            plant_data={"name": plant_species},
+            health_data=health_data,
+        )
+
     async def analyze(
         self,
         plant_data: dict,

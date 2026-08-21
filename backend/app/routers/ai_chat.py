@@ -18,7 +18,7 @@ from app.models.user import User
 from app.schemas.common import SuccessResponse
 from app.ai.graph.chat_graph import PlantifyChatRunner
 
-router = APIRouter(prefix="/api/ai", tags=["AI Chat"])
+router = APIRouter(tags=["AI Chat"])
 
 
 # ── Request/Response Schemas ───────────────────────────────────────
@@ -47,7 +47,8 @@ class ChatResponse(BaseModel):
 # ── Endpoint ───────────────────────────────────────────────────────
 
 
-@router.post("/chat", response_model=SuccessResponse, status_code=status.HTTP_200_OK)
+@router.post("/api/ai/chat", response_model=SuccessResponse, status_code=status.HTTP_200_OK)
+@router.post("/api/chat", response_model=SuccessResponse, status_code=status.HTTP_200_OK)
 async def ai_chat(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),

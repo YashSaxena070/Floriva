@@ -466,3 +466,16 @@ class TestAIChatEndpoint:
             assert "Powdery Mildew" in data["data"]["answer"]
             assert data["data"]["plant_id"] == plant_id
             assert "thread_id" in data["data"]
+
+            # Also verify /api/chat alias endpoint
+            response_alias = client.post(
+                "/api/chat",
+                json={
+                    "plant_id": plant_id,
+                    "question": "What should I do about the powdery spots?",
+                },
+                headers=auth_headers,
+            )
+            assert response_alias.status_code == 200
+            assert response_alias.json()["success"] is True
+
