@@ -1,4 +1,4 @@
-# 🌱 Plantify — Enterprise AI Plant Identification & Clinical Care Ecosystem
+# 🌱 Plantify — AI Plant Identification & Clinical Care Ecosystem
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React Native](https://img.shields.io/badge/React_Native-0.81.5-61DAFB.svg?logo=react&logoColor=black)](https://reactnative.dev)
