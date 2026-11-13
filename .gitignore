@@ -1,0 +1,29 @@
+# Environment variables
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+# Dependencies
+node_modules/
+dist/
+build/
+wheels/
+*.egg-info
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Expo / Mobile
+.expo/
+web-build/
+
+# IDE / OS files
+.DS_Store
+Thumbs.db
+*.log
