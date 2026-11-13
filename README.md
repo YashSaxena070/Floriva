@@ -1,4 +1,4 @@
-# 🌱 Plantify — AI Plant Identification & Clinical Care Ecosystem
+# 🌱 Floriva — AI Plant Identification & Clinical Care Ecosystem
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React Native](https://img.shields.io/badge/React_Native-0.81.5-61DAFB.svg?logo=react&logoColor=black)](https://reactnative.dev)
@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Plantify** is an enterprise-grade botanical intelligence and plant health management platform. Powered by an autonomous **LangGraph multi-agent vision pipeline**, **Groq LPU vision acceleration**, **Pl@ntNet neural taxonomy**, and an **offline-first React Native (Expo) architecture**, Plantify provides species identification, clinical pathology diagnostics, personalized care regimens, and verified pharmaceutical product fulfillment with human-in-the-loop governance.
+**Floriva** is an enterprise-grade botanical intelligence and plant health management platform. Powered by an autonomous **LangGraph multi-agent vision pipeline**, **Groq LPU vision acceleration**, **Pl@ntNet neural taxonomy**, and an **offline-first React Native (Expo) architecture**, Plantify provides species identification, clinical pathology diagnostics, personalized care regimens, and verified pharmaceutical product fulfillment with human-in-the-loop governance.
 
 ---
 
@@ -106,7 +106,7 @@ Plantify/
 
 ## 🔄 Deep-Dive AI & Data Pipelines
 
-Plantify decouples raw model inference from business logic using strict validation boundaries and structured agent graphs.
+Floriva decouples raw model inference from business logic using strict validation boundaries and structured agent graphs.
 
 ### 1. Autonomous Vision & Diagnostics LangGraph Pipeline
 
